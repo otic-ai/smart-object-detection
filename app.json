@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "SYNTHETIC_EYE",
+    "slug": "smart-object-detection",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0E0E0E"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.otic.syntheticeye",
+      "infoPlist": {
+        "NSCameraUsageDescription": "SYNTHETIC_EYE uses the camera for real-time AI object detection.",
+        "NSMicrophoneUsageDescription": "SYNTHETIC_EYE may use the microphone for voice commands.",
+        "NSPhotoLibraryUsageDescription": "SYNTHETIC_EYE needs access to your photos to analyse saved images."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0E0E0E"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.otic.syntheticeye",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      ["expo-camera", {
+        "cameraPermission": "SYNTHETIC_EYE uses the camera for real-time AI object detection."
+      }]
+    ]
+  }
+}
+
