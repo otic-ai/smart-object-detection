@@ -11,7 +11,7 @@
  *   2. Pass frames to on-device YOLOv8 / TFLite model (react-native-fast-tflite)
  *   3. Call `onDetectionResult(detection, boxes)` with model output each frame
  */
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NavigationProps } from '../types/navigation';
 import { BoundingBox, Detection } from '../types/detection';
@@ -46,9 +47,11 @@ export default function CameraDetectionScreen({
   onConfirm,
 }: Props) {
   const theme = useAppTheme();
+  const insets = useSafeAreaInsets();
   const hasDetection = detection !== null;
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null); // 🔌 use cameraRef for frame capture
+  const [isCameraActive, setIsCameraActive] = useState(false);
 
   // ─── Permission: not yet determined ───────────────────────────────────────
   if (!permission) {
@@ -97,53 +100,68 @@ export default function CameraDetectionScreen({
 
       {/* ─── Camera viewport ──────────────────────────────────────────── */}
       <View style={styles.cameraContainer}>
-        <CameraView
-          ref={cameraRef}
-          style={styles.camera}
-          facing="back"
-        >
-          {/* Corner brackets — sci-fi scan frame */}
-          <View style={[styles.corner, styles.topLeft,     { borderColor: theme.primary }]} />
-          <View style={[styles.corner, styles.topRight,    { borderColor: theme.primary }]} />
-          <View style={[styles.corner, styles.bottomLeft,  { borderColor: theme.primary }]} />
-          <View style={[styles.corner, styles.bottomRight, { borderColor: theme.primary }]} />
+        {!isCameraActive ? (
+          <View style={[styles.inactiveCamera, { backgroundColor: theme.surface }]}>
+            <MaterialCommunityIcons name="camera-off" size={64} color={theme.mutedText} />
+            <Text style={[styles.inactiveTitle, { color: theme.primaryText }]}>Camera Paused</Text>
+            <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>Press Start to begin scanning</Text>
+          </View>
+        ) : (
+          <CameraView
+            ref={cameraRef}
+            style={styles.camera}
+            facing="back"
+          >
+            {/* Corner brackets — sci-fi scan frame */}
+            <View style={[styles.corner, styles.topLeft,     { borderColor: theme.primary }]} />
+            <View style={[styles.corner, styles.topRight,    { borderColor: theme.primary }]} />
+            <View style={[styles.corner, styles.bottomLeft,  { borderColor: theme.primary }]} />
+            <View style={[styles.corner, styles.bottomRight, { borderColor: theme.primary }]} />
 
-          {/* Waiting overlay — shown when camera is live but model hasn't fired yet */}
-          {!hasDetection && (
-            <View style={styles.waitingOverlay}>
-              <Text style={[styles.waitingLabel, { color: theme.mutedText }]}>
-                Waiting for detection…
-              </Text>
-            </View>
-          )}
-
-          {/* 🔌 Bounding box overlay — driven entirely by onDetectionResult() output */}
-          {boundingBoxes.map((box, i) => (
-            <View
-              key={i}
-              style={[
-                styles.boundingBox,
-                {
-                  left: `${box.x}%` as any,
-                  top: `${box.y}%` as any,
-                  width: `${box.width}%` as any,
-                  height: `${box.height}%` as any,
-                  borderColor: theme.primary,
-                },
-              ]}
-            >
-              <View style={[styles.boxLabel, { backgroundColor: theme.primary }]}>
-                <Text style={styles.boxLabelText}>{box.label}  {box.confidence}%</Text>
+            {/* Waiting overlay — shown when camera is live but model hasn't fired yet */}
+            {!hasDetection && (
+              <View style={styles.waitingOverlay}>
+                <Text style={[styles.waitingLabel, { color: theme.mutedText }]}>
+                  Waiting for detection…
+                </Text>
               </View>
-            </View>
-          ))}
-        </CameraView>
+            )}
+
+            {/* 🔌 Bounding box overlay — driven entirely by onDetectionResult() output */}
+            {boundingBoxes.map((box, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.boundingBox,
+                  {
+                    left: `${box.x}%` as any,
+                    top: `${box.y}%` as any,
+                    width: `${box.width}%` as any,
+                    height: `${box.height}%` as any,
+                    borderColor: theme.primary,
+                  },
+                ]}
+              >
+                <View style={[styles.boxLabel, { backgroundColor: theme.primary }]}>
+                  <Text style={styles.boxLabelText}>{box.label}  {box.confidence}%</Text>
+                </View>
+              </View>
+            ))}
+          </CameraView>
+        )}
       </View>
 
       {/* ─── Bottom result panel ──────────────────────────────────────── */}
-      <View style={[styles.resultPanel, { backgroundColor: theme.surface, borderTopColor: theme.border }]}>
+      <View style={[styles.resultPanel, { backgroundColor: theme.surface, borderTopColor: theme.border, marginBottom: insets.bottom + 76 }]}>
         <View style={styles.resultRow}>
-          {hasDetection ? (
+          {!isCameraActive ? (
+            <View>
+              <Text style={[styles.waitingTitle, { color: theme.mutedText }]}>Camera Stopped</Text>
+              <Text style={[styles.resultSub, { color: theme.mutedText }]}>
+                Ready to scan when you are
+              </Text>
+            </View>
+          ) : hasDetection ? (
             <View>
               <Text style={[styles.detectionLabel, { color: theme.primaryText }]}>
                 {detection.label}
@@ -163,33 +181,52 @@ export default function CameraDetectionScreen({
           {/* 🔌 Confidence ring (SVG) goes here */}
         </View>
 
-        {/* Action buttons — disabled until the model produces a detection */}
+        {/* Action buttons */}
         <View style={styles.actions}>
-          <TouchableOpacity
-            style={[
-              styles.btnSecondary,
-              { borderColor: hasDetection ? theme.border : theme.border + '50' },
-            ]}
-            activeOpacity={hasDetection ? 0.7 : 0.4}
-            disabled={!hasDetection}
-            onPress={() => hasDetection && navigateTo('learn')}
-          >
-            <Text style={[styles.btnSecondaryText, { color: hasDetection ? theme.secondaryText : theme.mutedText }]}>
-              Correct
-            </Text>
-          </TouchableOpacity>
+          {!isCameraActive ? (
+            <TouchableOpacity
+              style={[styles.btnPrimary, { backgroundColor: theme.primary }]}
+              activeOpacity={0.8}
+              onPress={() => setIsCameraActive(true)}
+            >
+              <Text style={[styles.btnPrimaryText, { color: '#0E0E0E' }]}>Start Scanning</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              {/* Stop button always visible when active */}
+              <TouchableOpacity
+                style={[styles.btnSecondary, { borderColor: theme.error, flex: hasDetection ? 0.4 : 1 }]}
+                activeOpacity={0.7}
+                onPress={() => setIsCameraActive(false)}
+              >
+                <Text style={[styles.btnSecondaryText, { color: theme.error }]}>Stop</Text>
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[
-              styles.btnPrimary,
-              { backgroundColor: hasDetection ? theme.primary : theme.primary + '40' },
-            ]}
-            activeOpacity={hasDetection ? 0.7 : 0.4}
-            disabled={!hasDetection}
-            onPress={hasDetection ? onConfirm : undefined}
-          >
-            <Text style={[styles.btnPrimaryText, { color: '#0E0E0E' }]}>Confirm</Text>
-          </TouchableOpacity>
+              {/* Correct / Confirm buttons only when detection is present */}
+              {hasDetection && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.btnSecondary, { borderColor: theme.border, flex: 0.8 }]}
+                    activeOpacity={0.7}
+                    onPress={() => navigateTo('learn')}
+                  >
+                    <Text style={[styles.btnSecondaryText, { color: theme.secondaryText }]}>Correct</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.btnPrimary, { backgroundColor: theme.primary, flex: 1.2 }]}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      onConfirm();
+                      setIsCameraActive(false);
+                    }}
+                  >
+                    <Text style={[styles.btnPrimaryText, { color: '#0E0E0E' }]}>Confirm</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </>
+          )}
         </View>
       </View>
     </View>
@@ -233,6 +270,20 @@ const styles = StyleSheet.create({
   // Camera
   cameraContainer: {
     flex: 1,
+  },
+  inactiveCamera: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  inactiveTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  inactiveSub: {
+    fontSize: 14,
   },
   camera: {
     flex: 1,
@@ -282,7 +333,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 18,
     borderTopWidth: 1,
-    marginBottom: 72,
     gap: 14,
   },
   resultRow: {
