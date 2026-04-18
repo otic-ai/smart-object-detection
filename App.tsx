@@ -15,7 +15,8 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AppRoute } from './src/types/navigation';
-import { BoundingBox, Detection } from './src/types/detection';
+import { BoundingBox, Detection, NormalizationInput } from './src/types/detection';
+import { normalizeDetection } from './src/pipeline/normalization';
 import MobileBottomNav from './src/components/MobileBottomNav';
 import CameraDetectionScreen from './src/screens/CameraDetectionScreen';
 import CorrectionLearningScreen from './src/screens/CorrectionLearningScreen';
@@ -27,9 +28,9 @@ export default function App() {
 
   // ─── Shared detection state ────────────────────────────────────────────────
   // Starts null / empty. The YOLOv8 model populates these via onDetectionResult.
-  const [activeDetection, setActiveDetection]       = useState<Detection | null>(null);
+  const [activeDetection, setActiveDetection] = useState<Detection | null>(null);
   const [activeBoundingBoxes, setActiveBoundingBoxes] = useState<BoundingBox[]>([]);
-  const [detectionHistory, setDetectionHistory]     = useState<Detection[]>([]);
+  const [detectionHistory, setDetectionHistory] = useState<Detection[]>([]);
 
   // ─── Navigation ────────────────────────────────────────────────────────────
   const navigateTo = (nextRoute: AppRoute) => {
@@ -46,12 +47,33 @@ export default function App() {
   // ─── Detection callbacks ───────────────────────────────────────────────────
 
   /**
-   * 🔌 AI INTEGRATION POINT
-   * Call this from the YOLOv8 / TFLite model on each processed frame.
-   * `detection` = top-confidence match; `boxes` = all bounding boxes for the frame.
+   * Layer-3/4 pipeline hook.
+   * Feed raw model + feature signals here on each processed frame.
    */
-  const onDetectionResult = useCallback((detection: Detection, boxes: BoundingBox[]) => {
-    setActiveDetection(detection);
+  const onDetectionResult = useCallback((input: NormalizationInput, boxes: BoundingBox[]) => {
+    const normalized = normalizeDetection(input);
+
+    const timestamp = input.timestamp ?? new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const mapped: Detection = {
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      label: normalized.normalizedName !== 'unknown' ? normalized.normalizedName : input.className,
+      confidence: normalized.confidence,
+      status: normalized.status,
+      timestamp,
+      rawClass: input.className,
+      normalizedName: normalized.normalizedName,
+      ocrText: input.ocrText,
+      dominantColor: input.dominantColor,
+      scoreBreakdown: normalized.scoreBreakdown,
+      suggestions: normalized.suggestions,
+      boundingBoxes: boxes,
+    };
+
+    setActiveDetection(mapped);
     setActiveBoundingBoxes(boxes);
   }, []);
 

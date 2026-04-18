@@ -21,7 +21,7 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NavigationProps } from '../types/navigation';
-import { BoundingBox, Detection } from '../types/detection';
+import { BoundingBox, Detection, NormalizationInput } from '../types/detection';
 import { useAppTheme } from '../theme/appTheme';
 import TopAppBar from '../components/TopAppBar';
 
@@ -32,9 +32,9 @@ type Props = NavigationProps & {
   boundingBoxes: BoundingBox[];
   /**
    * 🔌 AI INTEGRATION POINT — call this from the YOLOv8 / TFLite model
-   * on each processed frame.
+   * + feature extraction pipeline on each processed frame.
    */
-  onDetectionResult: (detection: Detection, boxes: BoundingBox[]) => void;
+  onDetectionResult: (input: NormalizationInput, boxes: BoundingBox[]) => void;
   /** Called when the user confirms the current detection is correct. */
   onConfirm: () => void;
 };
@@ -103,9 +103,9 @@ export default function CameraDetectionScreen({
           facing="back"
         >
           {/* Corner brackets — sci-fi scan frame */}
-          <View style={[styles.corner, styles.topLeft,     { borderColor: theme.primary }]} />
-          <View style={[styles.corner, styles.topRight,    { borderColor: theme.primary }]} />
-          <View style={[styles.corner, styles.bottomLeft,  { borderColor: theme.primary }]} />
+          <View style={[styles.corner, styles.topLeft, { borderColor: theme.primary }]} />
+          <View style={[styles.corner, styles.topRight, { borderColor: theme.primary }]} />
+          <View style={[styles.corner, styles.bottomLeft, { borderColor: theme.primary }]} />
           <View style={[styles.corner, styles.bottomRight, { borderColor: theme.primary }]} />
 
           {/* Waiting overlay — shown when camera is live but model hasn't fired yet */}
@@ -254,10 +254,10 @@ const styles = StyleSheet.create({
     height: 24,
     borderWidth: 2,
   },
-  topLeft:     { top: 20,    left: 20,  borderRightWidth: 0, borderBottomWidth: 0 },
-  topRight:    { top: 20,    right: 20, borderLeftWidth: 0,  borderBottomWidth: 0 },
-  bottomLeft:  { bottom: 20, left: 20,  borderRightWidth: 0, borderTopWidth: 0   },
-  bottomRight: { bottom: 20, right: 20, borderLeftWidth: 0,  borderTopWidth: 0   },
+  topLeft: { top: 20, left: 20, borderRightWidth: 0, borderBottomWidth: 0 },
+  topRight: { top: 20, right: 20, borderLeftWidth: 0, borderBottomWidth: 0 },
+  bottomLeft: { bottom: 20, left: 20, borderRightWidth: 0, borderTopWidth: 0 },
+  bottomRight: { bottom: 20, right: 20, borderLeftWidth: 0, borderTopWidth: 0 },
 
   // Bounding box overlay
   boundingBox: {
