@@ -52,6 +52,7 @@ export default function CameraDetectionScreen({
   // ADD THIS:
   const { isModelReady, modelError } = useDetectionLoop({
     onDetectionResult,
+    isActive: isCameraActive,
     cameraRef
   });
 

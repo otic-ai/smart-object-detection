@@ -1,15 +1,16 @@
 // useDetectionLoop.tsx — replace the whole hook with this
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Detection, BoundingBox } from '../types/detection';
-import { detectionEngine, DetectionEngineResult } from './DetectionEngine';
-import * as ImageManipulator from 'expo-image-manipulator';
-import { CameraView } from 'expo-camera';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Detection, BoundingBox } from "../types/detection";
+import { detectionEngine, DetectionEngineResult } from "./DetectionEngine";
+import * as ImageManipulator from "expo-image-manipulator";
+import { CameraView } from "expo-camera";
 
 interface UseDetectionLoopOptions {
   onDetectionResult: (detection: Detection, boxes: BoundingBox[]) => void;
   cameraRef: React.RefObject<CameraView | null>;
   throttleMs?: number;
+  isActive: boolean;  // ← add
 }
 
 interface UseDetectionLoopReturn {
@@ -20,9 +21,9 @@ interface UseDetectionLoopReturn {
 export function useDetectionLoop({
   onDetectionResult,
   cameraRef,
+  isActive,
   throttleMs = 500,
 }: UseDetectionLoopOptions): UseDetectionLoopReturn {
-
   const [isModelReady, setIsModelReady] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const isRunningRef = useRef(false);
@@ -30,9 +31,15 @@ export function useDetectionLoop({
   // Load model once on mount
   useEffect(() => {
     let cancelled = false;
-    detectionEngine.loadModel()
-      .then(() => { if (!cancelled) setIsModelReady(true); })
-      .catch(() => { if (!cancelled) setModelError('Failed to load YOLOv8 model'); });
+    detectionEngine
+      .loadModel()
+      .then(() => {
+        if (!cancelled) setIsModelReady(true);
+      })
+      .catch((err) => {
+        console.error("[Loop] model load failed:", err);
+        if (!cancelled) setModelError("Failed to load YOLOv8 model");
+      });
     return () => {
       cancelled = true;
       detectionEngine.dispose();
@@ -41,7 +48,7 @@ export function useDetectionLoop({
 
   // Poll camera snapshots every throttleMs
   useEffect(() => {
-    if (!isModelReady) return;
+    if (!isModelReady || !isActive) return;
 
     const interval = setInterval(async () => {
       if (isRunningRef.current) return;
@@ -56,7 +63,10 @@ export function useDetectionLoop({
           skipProcessing: true,
         });
 
-        if (!photo?.uri) return;
+        if (!photo?.uri) {
+          console.warn("[Loop] photo URI missing");
+          return;
+        }
         // Resize to 640×640 and get PNG base64 — PNG gives raw-like pixels
         // JPEG base64 won't work because _preprocessFrame expects raw pixel bytes
         const resized = await ImageManipulator.manipulateAsync(
@@ -65,7 +75,10 @@ export function useDetectionLoop({
           { base64: true, format: ImageManipulator.SaveFormat.PNG }
         );
 
-        if (!resized.base64) return;
+        if (!resized.base64) {
+          console.warn("[Loop] resized base64 missing");
+          return;
+        }
 
         const results = await detectionEngine.detectFromBase64(
           resized.base64,
@@ -73,37 +86,42 @@ export function useDetectionLoop({
           640
         );
 
-        if (results.length === 0) return;
+        console.log("results" + results);
+
+        if (results.length === 0) {
+          console.log("[Loop] no detections this frame");
+          return;
+        }
 
         const boxes: BoundingBox[] = results.map((r) => ({
-          x:          r.bbox.x,
-          y:          r.bbox.y,
-          width:      r.bbox.width,
-          height:     r.bbox.height,
-          label:      r.label,
+          x: r.bbox.x,
+          y: r.bbox.y,
+          width: r.bbox.width,
+          height: r.bbox.height,
+          label: r.label,
           confidence: r.confidence,
         }));
 
         const top = results[0];
         const detection: Detection = {
-          id:            `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          label:         top.label,
-          confidence:    top.confidence,
-          status:        top.confidence >= 80 ? 'verified' : 'ambiguous',
-          timestamp:     new Date().toLocaleTimeString(),
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          label: top.label,
+          confidence: top.confidence,
+          status: top.confidence >= 80 ? "verified" : "ambiguous",
+          timestamp: new Date().toLocaleTimeString(),
           boundingBoxes: boxes,
         };
 
         onDetectionResult(detection, boxes);
       } catch (e) {
-        console.warn('[useDetectionLoop] frame error:', e);
+        console.warn("[useDetectionLoop] frame error:", e);
       } finally {
         isRunningRef.current = false;
       }
     }, throttleMs);
 
     return () => clearInterval(interval);
-  }, [isModelReady, cameraRef, onDetectionResult, throttleMs]);
+  }, [isModelReady, cameraRef, onDetectionResult, throttleMs , isActive]);
 
   return { isModelReady, modelError };
 }

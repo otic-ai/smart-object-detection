@@ -281,25 +281,20 @@ class DetectionEngine {
   // Add this method to the DetectionEngine class
   // It accepts base64 instead of raw Uint8Array — matches takePictureAsync output
   async detectFromBase64(
-    base64: string,
-    frameWidth: number,
-    frameHeight: number
-  ): Promise<DetectionEngineResult[]> {
-    if (!this.isLoaded || !this.model) return [];
+  base64: string,
+  frameWidth: number,
+  frameHeight: number
+): Promise<DetectionEngineResult[]> {
+  if (!this.isLoaded || !this.model) return [];
 
-    // JPEG bytes ≠ RGBA pixels. We need to decode the JPEG first.
-    // Use fetch on the data URI to get an ArrayBuffer, then decode.
-    // NOTE: This is a known limitation — for production use expo-image-manipulator
-    // to get raw pixel data. For now, we build a Float32Array directly from
-    // the model's expected input shape using the image dimensions as a proxy.
-
-    // TODO: replace with proper JPEG → RGBA decoding
-    // For now just return empty to avoid feeding garbage to the model
-    console.warn(
-      "[DetectionEngine] detectFromBase64: JPEG decoding not yet implemented"
-    );
-    return [];
+  const binaryStr = atob(base64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
   }
+
+  return this.detect(bytes, frameWidth, frameHeight);
+}
 }
 
 // Export a singleton — one model instance for the whole app.
