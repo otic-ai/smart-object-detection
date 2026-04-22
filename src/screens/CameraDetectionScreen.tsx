@@ -12,7 +12,12 @@
  *   3. Call `onDetectionResult(detection, boxes)` with model output each frame
  */
 import React, { useRef, useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+} from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -22,6 +27,7 @@ import { useAppTheme } from "../theme/appTheme";
 import TopAppBar from "../components/TopAppBar";
 import { useDetectionLoop } from "../detection/useDetectionLoop";
 
+// ─── Props ─────────────────────────────────────────────────────────────────────
 type Props = NavigationProps & {
   /** Active detection from the model pipeline. Null = no detection yet. */
   detection: Detection | null;
@@ -38,6 +44,7 @@ type Props = NavigationProps & {
   onClearDetection: () => void;
 };
 
+// ─── Component ─────────────────────────────────────────────────────────────────
 export default function CameraDetectionScreen({
   navigateTo,
   detection,
@@ -50,13 +57,13 @@ export default function CameraDetectionScreen({
   const insets = useSafeAreaInsets();
   const hasDetection = detection !== null;
   const [permission, requestPermission] = useCameraPermissions();
-  const cameraRef = useRef<CameraView>(null); // 🔌 use cameraRef for frame capture
+  const cameraRef = useRef<CameraView>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const { isModelReady, modelError } = useDetectionLoop({
     onDetectionResult,
     isActive: isCameraActive,
     cameraRef,
-    throttleMs: 500, // 2 FPS - allow more time for all async operations
+    throttleMs: 500,
   });
 
   // Safety reset on mount (handles hot reload)
@@ -74,17 +81,14 @@ export default function CameraDetectionScreen({
     }
   }, [isCameraActive, onClearDetection]);
 
-  // ─── Permission: not yet determined ───────────────────────────────────────
+
+  // ─── Permission: not yet determined ─────────────────────────────────────────
   if (!permission) {
     return (
       <View style={[styles.root, { backgroundColor: theme.background }]}>
         <TopAppBar />
         <View style={styles.permissionState}>
-          <MaterialCommunityIcons
-            name="camera-outline"
-            size={52}
-            color={theme.mutedText}
-          />
+          <MaterialCommunityIcons name="camera-outline" size={52} color={theme.mutedText} />
           <Text style={[styles.permissionTitle, { color: theme.mutedText }]}>
             Checking camera permission…
           </Text>
@@ -93,17 +97,13 @@ export default function CameraDetectionScreen({
     );
   }
 
-  // ─── Permission: denied ────────────────────────────────────────────────────
+  // ─── Permission: denied ──────────────────────────────────────────────────────
   if (!permission.granted) {
     return (
       <View style={[styles.root, { backgroundColor: theme.background }]}>
         <TopAppBar />
         <View style={styles.permissionState}>
-          <MaterialCommunityIcons
-            name="camera-off-outline"
-            size={52}
-            color={theme.error}
-          />
+          <MaterialCommunityIcons name="camera-off-outline" size={52} color={theme.error} />
           <Text style={[styles.permissionTitle, { color: theme.primaryText }]}>
             Camera access required
           </Text>
@@ -124,14 +124,15 @@ export default function CameraDetectionScreen({
     );
   }
 
-  // ─── Permission: granted — show live camera ────────────────────────────────
+  // ─── Permission: granted — show live camera ──────────────────────────────────
   return (
     <View style={[styles.root, { backgroundColor: theme.background }]}>
       <TopAppBar />
 
-      {/* ─── Camera viewport ──────────────────────────────────────────── */}
+      {/* ─── Camera viewport ──────────────────────────────────────────────── */}
       <View style={styles.cameraContainer}>
-        {/* Inactive overlay — shown on top when camera is paused */}
+
+        {/* Inactive overlay — floats above camera when paused */}
         {!isCameraActive && (
           <View
             style={[
@@ -143,11 +144,7 @@ export default function CameraDetectionScreen({
               },
             ]}
           >
-            <MaterialCommunityIcons
-              name="camera-off"
-              size={64}
-              color={theme.mutedText}
-            />
+            <MaterialCommunityIcons name="camera-off" size={64} color={theme.mutedText} />
             <Text style={[styles.inactiveTitle, { color: theme.primaryText }]}>
               Camera Paused
             </Text>
@@ -157,47 +154,26 @@ export default function CameraDetectionScreen({
           </View>
         )}
 
-        {/* CameraView always mounted — never unmounts */}
+        {/* CameraView always mounted — never unmounts so detection loop stays alive */}
         <View style={{ flex: 1 }}>
-          <CameraView 
+          <CameraView
             key={`camera-${permission?.granted}`}
-            ref={cameraRef} 
-            style={styles.camera} 
-            facing="back" 
-            active={isCameraActive} 
+            ref={cameraRef}
+            style={styles.camera}
+            facing="back"
+            active={isCameraActive}
           />
 
-          {/* Detection overlay */}
+          {/* Detection overlay — sits on top of camera feed */}
           <View style={styles.overlay}>
-            <View
-              style={[
-                styles.corner,
-                styles.topLeft,
-                { borderColor: theme.primary },
-              ]}
-            />
-            <View
-              style={[
-                styles.corner,
-                styles.topRight,
-                { borderColor: theme.primary },
-              ]}
-            />
-            <View
-              style={[
-                styles.corner,
-                styles.bottomLeft,
-                { borderColor: theme.primary },
-              ]}
-            />
-            <View
-              style={[
-                styles.corner,
-                styles.bottomRight,
-                { borderColor: theme.primary },
-              ]}
-            />
 
+            {/* Sci-fi corner brackets */}
+            <View style={[styles.corner, styles.topLeft,     { borderColor: theme.primary }]} />
+            <View style={[styles.corner, styles.topRight,    { borderColor: theme.primary }]} />
+            <View style={[styles.corner, styles.bottomLeft,  { borderColor: theme.primary }]} />
+            <View style={[styles.corner, styles.bottomRight, { borderColor: theme.primary }]} />
+
+            {/* Waiting overlay — shows model status or waiting message */}
             {!hasDetection && isCameraActive && (
               <View style={styles.waitingOverlay}>
                 <Text
@@ -206,58 +182,54 @@ export default function CameraDetectionScreen({
                     { color: modelError ? theme.error : theme.mutedText },
                   ]}
                 >
-                  {modelError ??
-                    (!isModelReady
-                      ? "Loading model…"
-                      : "Waiting for detection…")}
+                  {modelError ?? (!isModelReady ? "Loading model…" : "Waiting for detection…")}
                 </Text>
               </View>
             )}
 
+            {/* 🔌 Bounding box overlay — one rectangle per detected object */}
             {boundingBoxes.map((box, i) => (
               <View
                 key={i}
                 style={[
                   styles.boundingBox,
                   {
-                    left: `${box.x}%` as any,
-                    top: `${box.y}%` as any,
-                    width: `${box.width}%` as any,
+                    left:   `${box.x}%`      as any,
+                    top:    `${box.y}%`      as any,
+                    width:  `${box.width}%`  as any,
                     height: `${box.height}%` as any,
                     borderColor: theme.primary,
                   },
                 ]}
               >
-                <View
-                  style={[styles.boxLabel, { backgroundColor: theme.primary }]}
-                >
+                <View style={[styles.boxLabel, { backgroundColor: theme.primary }]}>
                   <Text style={styles.boxLabelText}>
-                    {box.label} {box.confidence}%
+                    {box.label}  {box.confidence}%
                   </Text>
                 </View>
               </View>
             ))}
+
           </View>
         </View>
       </View>
 
-      {/* ─── Bottom result panel ──────────────────────────────────────── */}
+      {/* ─── Bottom result panel ──────────────────────────────────────────── */}
       <View
         style={[
           styles.resultPanel,
           {
             backgroundColor: theme.surface,
-            borderTopColor: theme.border,
-            marginBottom: insets.bottom + 76,
+            borderTopColor:  theme.border,
+            marginBottom:    insets.bottom + 76,
           },
         ]}
       >
+        {/* Detection info row */}
         <View style={styles.resultRow}>
           {hasDetection ? (
             <View>
-              <Text
-                style={[styles.detectionLabel, { color: theme.primaryText }]}
-              >
+              <Text style={[styles.detectionLabel, { color: theme.primaryText }]}>
                 {detection.label}
               </Text>
               <Text style={[styles.resultSub, { color: theme.mutedText }]}>
@@ -289,6 +261,8 @@ export default function CameraDetectionScreen({
         {/* Action buttons */}
         <View style={styles.actions}>
           {!isCameraActive ? (
+
+            /* START button — camera is off */
             <TouchableOpacity
               style={[styles.btnPrimary, { backgroundColor: theme.primary }]}
               activeOpacity={0.8}
@@ -298,9 +272,10 @@ export default function CameraDetectionScreen({
                 Start Scanning
               </Text>
             </TouchableOpacity>
+
           ) : (
             <>
-              {/* Stop button always visible when active */}
+              {/* STOP — always visible while camera is active */}
               <TouchableOpacity
                 style={[
                   styles.btnSecondary,
@@ -314,7 +289,7 @@ export default function CameraDetectionScreen({
                 </Text>
               </TouchableOpacity>
 
-              {/* Correct / Confirm buttons only when detection is present */}
+              {/* CORRECT + CONFIRM — only when a detection is active */}
               {hasDetection && (
                 <>
                   <TouchableOpacity
@@ -325,12 +300,7 @@ export default function CameraDetectionScreen({
                     activeOpacity={0.7}
                     onPress={() => navigateTo("learn")}
                   >
-                    <Text
-                      style={[
-                        styles.btnSecondaryText,
-                        { color: theme.secondaryText },
-                      ]}
-                    >
+                    <Text style={[styles.btnSecondaryText, { color: theme.secondaryText }]}>
                       Correct
                     </Text>
                   </TouchableOpacity>
@@ -360,12 +330,13 @@ export default function CameraDetectionScreen({
   );
 }
 
+// ─── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
 
-  // Permission states
+  // ── Permission states
   permissionState: {
     flex: 1,
     alignItems: "center",
@@ -394,7 +365,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  // Camera
+  // ── Camera
   cameraContainer: {
     flex: 1,
   },
@@ -415,6 +386,10 @@ const styles = StyleSheet.create({
   camera: {
     flex: 1,
   },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+  },
   waitingOverlay: {
     position: "absolute",
     bottom: 20,
@@ -425,19 +400,19 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  // Corner brackets
+  // ── Corner brackets
   corner: {
     position: "absolute",
     width: 24,
     height: 24,
     borderWidth: 2,
   },
-  topLeft: { top: 20, left: 20, borderRightWidth: 0, borderBottomWidth: 0 },
-  topRight: { top: 20, right: 20, borderLeftWidth: 0, borderBottomWidth: 0 },
-  bottomLeft: { bottom: 20, left: 20, borderRightWidth: 0, borderTopWidth: 0 },
-  bottomRight: { bottom: 20, right: 20, borderLeftWidth: 0, borderTopWidth: 0 },
+  topLeft:     { top: 20,    left: 20,  borderRightWidth: 0, borderBottomWidth: 0 },
+  topRight:    { top: 20,    right: 20, borderLeftWidth: 0,  borderBottomWidth: 0 },
+  bottomLeft:  { bottom: 20, left: 20,  borderRightWidth: 0, borderTopWidth: 0   },
+  bottomRight: { bottom: 20, right: 20, borderLeftWidth: 0,  borderTopWidth: 0   },
 
-  // Bounding box overlay
+  // ── Bounding box
   boundingBox: {
     position: "absolute",
     borderWidth: 2,
@@ -455,7 +430,7 @@ const styles = StyleSheet.create({
     color: "#0E0E0E",
   },
 
-  // Result panel
+  // ── Result panel
   resultPanel: {
     paddingHorizontal: 20,
     paddingVertical: 18,
@@ -480,7 +455,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // Buttons
+  // ── Buttons
   actions: {
     flexDirection: "row",
     gap: 10,
@@ -508,9 +483,5 @@ const styles = StyleSheet.create({
   btnSecondaryText: {
     fontSize: 14,
     fontWeight: "600",
-  },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 10,
   },
 });
