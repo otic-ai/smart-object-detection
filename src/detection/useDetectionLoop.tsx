@@ -9,8 +9,8 @@ interface UseDetectionLoopOptions {
   cameraRef: React.RefObject<CameraView | null>;
   /**
    * How often to capture + run inference (ms).
-   * 300ms = ~3fps which feels live without hammering the CPU.
-   * Increase if the device gets hot, decrease for snappier response.
+   * 500ms = ~2fps. Accounts for: takePictureAsync + ImageManipulator + model inference.
+   * Actual FPS depends on device performance. Check console logs for timing breakdown.
    */
   throttleMs?: number;
   isActive: boolean;
@@ -25,18 +25,26 @@ export function useDetectionLoop({
   onDetectionResult,
   cameraRef,
   isActive,
-  throttleMs = 300,
+  throttleMs = 500,
 }: UseDetectionLoopOptions): UseDetectionLoopReturn {
   const [isModelReady, setIsModelReady] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const isRunningRef = useRef(false);
+  const frameCountRef = useRef(0);
+  const isLoopActiveRef = useRef(false); // Track if loop is actually running
 
   // Load TFLite model once on mount
   useEffect(() => {
     let cancelled = false;
+    console.log("[Loop] 📦 Loading model...");
     detectionEngine
       .loadModel()
-      .then(() => { if (!cancelled) setIsModelReady(true); })
+      .then(() => { 
+        if (!cancelled) {
+          console.log("[Loop] ✅ Model loaded successfully");
+          setIsModelReady(true);
+        }
+      })
       .catch((err) => {
         console.error("[Loop] ❌ model load failed:", err);
         if (!cancelled) setModelError(`Failed to load model: ${err}`);
@@ -49,47 +57,94 @@ export function useDetectionLoop({
 
   // Capture → resize → decode → infer every throttleMs when active
   useEffect(() => {
-    if (!isModelReady || !isActive) return;
+    if (!isModelReady || !isActive || !cameraRef.current) {
+      isLoopActiveRef.current = false;
+      if (isActive) console.log(`[Loop] ⏸ Not ready: modelReady=${isModelReady}, hasRef=${!!cameraRef.current}`);
+      return;
+    }
 
+    isLoopActiveRef.current = true;
+    console.log("[Loop] 🎥 Starting detection loop with throttle:", throttleMs, "ms");
+    let isMounted = true;
+    let tickCount = 0;
     const interval = setInterval(async () => {
-      // Skip this tick if previous inference is still running
-      if (isRunningRef.current) return;
-      if (!cameraRef.current) return;
+      tickCount++;
+      // Skip this tick if previous inference is still running or loop has been stopped
+      if (isRunningRef.current) {
+        console.log(`[Loop] TICK #${tickCount} - Skipped (inference running)`);
+        return;
+      }
+      if (!isMounted) {
+        console.log(`[Loop] TICK #${tickCount} - Skipped (not mounted)`);
+        return;
+      }
+      if (!isLoopActiveRef.current) {
+        console.log(`[Loop] TICK #${tickCount} - Skipped (loop not active)`);
+        return;
+      }
+      if (!cameraRef.current) {
+        console.log(`[Loop] TICK #${tickCount} - Skipped (no camera ref)`);
+        return;
+      }
+
+      console.log(`[Loop] TICK #${tickCount} - Processing frame...`);
 
       try {
         isRunningRef.current = true;
+        frameCountRef.current++;
+        const frameStart = Date.now();
 
         // 1. Capture frame from camera (no skipProcessing — needed for correct orientation)
+        const captureStart = Date.now();
+        console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - Calling takePictureAsync...`);
         const photo = await cameraRef.current.takePictureAsync({ quality: 0.4 });
+        const captureTime = Date.now() - captureStart;
+        console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - takePictureAsync returned in ${captureTime}ms, uri=${!!photo?.uri}`);
 
         if (!photo?.uri) {
-          console.warn("[Loop] ❌ takePictureAsync returned no URI");
+          console.warn("[Loop] ❌ Frame #" + frameCountRef.current + " - takePictureAsync returned no URI");
           return;
         }
 
         // 2. Resize to 640×640 and get JPEG base64
         //    JPEG (not PNG) because jpeg-js decodes to raw RGBA in Hermes without
         //    needing TextDecoder('latin1') which Hermes does not support.
+        const resizeStart = Date.now();
+        console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - Calling ImageManipulator.manipulateAsync...`);
         const resized = await ImageManipulator.manipulateAsync(
           photo.uri,
           [{ resize: { width: 640, height: 640 } }],
           { base64: true, format: ImageManipulator.SaveFormat.JPEG }
         );
+        const resizeTime = Date.now() - resizeStart;
+        console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - ImageManipulator returned in ${resizeTime}ms, hasBase64=${!!resized.base64}`);
 
         if (!resized.base64) {
-          console.warn("[Loop] ❌ ImageManipulator returned no base64");
+          console.warn("[Loop] ❌ Frame #" + frameCountRef.current + " - ImageManipulator returned no base64");
           return;
         }
 
         // 3. Decode PNG → RGBA pixels → run YOLOv8 inference
+        const inferenceStart = Date.now();
+        console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - Calling detectFromBase64...`);
         const results = await detectionEngine.detectFromBase64(resized.base64, 640, 640);
+        const inferenceTime = Date.now() - inferenceStart;
+        console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - detectFromBase64 returned ${results.length} results in ${inferenceTime}ms`);
 
         if (results.length === 0) {
           // Normal — model ran fine but nothing was above the 50% threshold
+          console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - No detections above threshold`);
           return;
         }
 
-        console.log(`[Loop] ✅ ${results.length} detection(s): ${results.map(r => r.label).join(", ")}`);
+        // Check again if loop is still active before reporting results
+        if (!isLoopActiveRef.current) {
+          console.log("[Loop] ℹ️ Detection found but loop stopped, discarding results");
+          return;
+        }
+
+        const totalTime = Date.now() - frameStart;
+        console.log(`[Loop] ✅ Frame #${frameCountRef.current}: ${results.length} detection(s): ${results.map(r => r.label).join(", ")} | Timing: Capture=${captureTime}ms, Resize=${resizeTime}ms, Inference=${inferenceTime}ms, Total=${totalTime}ms`);
 
         // 4. Map results to bounding boxes
         const boxes: BoundingBox[] = results.map((r) => ({
@@ -119,8 +174,14 @@ export function useDetectionLoop({
       }
     }, throttleMs);
 
-    return () => clearInterval(interval);
-  }, [isModelReady, isActive, cameraRef, onDetectionResult, throttleMs]);
+    return () => {
+      isLoopActiveRef.current = false;
+      isMounted = false;
+      clearInterval(interval);
+      console.log("[Loop] 🛑 Detection loop stopped. Frames processed:", frameCountRef.current);
+      frameCountRef.current = 0;
+    };
+  }, [isModelReady, isActive, onDetectionResult, throttleMs]);
 
   return { isModelReady, modelError };
 }

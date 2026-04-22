@@ -64,21 +64,32 @@ class DetectionEngine {
     if (!this.isLoaded || !this.model) return [];
 
     try {
+      const startTime = Date.now();
+
       // Step 1: base64 string → ArrayBuffer (pure JS, no Buffer)
+      const decodeStart = Date.now();
       const arrayBuffer = decodeBase64(base64);
+      const decodeTime = Date.now() - decodeStart;
 
       // Step 2: ArrayBuffer → raw RGBA Uint8Array via jpeg-js
       // useTArray:true → output is Uint8Array instead of Buffer (Hermes safe)
       // formatAsRGBA:true (default) → 4 bytes per pixel: R, G, B, A
+      const jpegStart = Date.now();
       const decoded = jpegJs.decode(new Uint8Array(arrayBuffer), {
         useTArray: true,
         formatAsRGBA: true,
       });
-
-      console.log(`[DetectionEngine] JPEG decoded: ${decoded.width}x${decoded.height}`);
+      const jpegTime = Date.now() - jpegStart;
 
       // Step 3: raw RGBA → Float32 tensor → inference
-      return this.detect(decoded.data, decoded.width, decoded.height);
+      const detectStart = Date.now();
+      const results = await this.detect(decoded.data, decoded.width, decoded.height);
+      const detectTime = Date.now() - detectStart;
+
+      const totalTime = Date.now() - startTime;
+      console.log(`[DetectionEngine] Base64→Detect timing: Base64Decode=${decodeTime}ms, JPEGDecode=${jpegTime}ms, Detect=${detectTime}ms, Total=${totalTime}ms`);
+
+      return results;
     } catch (err) {
       console.error("[DetectionEngine] detectFromBase64 failed:", err);
       return [];
@@ -91,10 +102,26 @@ class DetectionEngine {
     frameHeight: number
   ): Promise<DetectionEngineResult[]> {
     if (!this.isLoaded || !this.model) return [];
+    
+    const startTime = Date.now();
+
+    const prepStart = Date.now();
     const inputTensor = this._preprocessFrame(pixelData, frameWidth, frameHeight);
+    const prepTime = Date.now() - prepStart;
+
+    const inferenceStart = Date.now();
     const outputs = await this.model.run([inputTensor]);
+    const inferenceTime = Date.now() - inferenceStart;
+
+    const parseStart = Date.now();
     const rawOutput = outputs[0] as Float32Array;
-    return this._parseOutput(rawOutput);
+    const results = this._parseOutput(rawOutput);
+    const parseTime = Date.now() - parseStart;
+
+    const totalTime = Date.now() - startTime;
+    console.log(`[DetectionEngine] Detect timing: Preprocess=${prepTime}ms, Inference=${inferenceTime}ms, Parse=${parseTime}ms, Total=${totalTime}ms`);
+
+    return results;
   }
 
   dispose(): void {

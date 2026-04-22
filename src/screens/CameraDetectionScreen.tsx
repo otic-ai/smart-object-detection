@@ -11,7 +11,7 @@
  *   2. Pass frames to on-device YOLOv8 / TFLite model (react-native-fast-tflite)
  *   3. Call `onDetectionResult(detection, boxes)` with model output each frame
  */
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -34,6 +34,8 @@ type Props = NavigationProps & {
   onDetectionResult: (detection: Detection, boxes: BoundingBox[]) => void;
   /** Called when the user confirms the current detection is correct. */
   onConfirm: () => void;
+  /** Called when the camera is stopped to clear old detection results. */
+  onClearDetection: () => void;
 };
 
 export default function CameraDetectionScreen({
@@ -42,6 +44,7 @@ export default function CameraDetectionScreen({
   boundingBoxes,
   onDetectionResult,
   onConfirm,
+  onClearDetection,
 }: Props) {
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
@@ -49,12 +52,27 @@ export default function CameraDetectionScreen({
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null); // 🔌 use cameraRef for frame capture
   const [isCameraActive, setIsCameraActive] = useState(false);
-  // ADD THIS:
   const { isModelReady, modelError } = useDetectionLoop({
     onDetectionResult,
     isActive: isCameraActive,
-    cameraRef
+    cameraRef,
+    throttleMs: 500, // 2 FPS - allow more time for all async operations
   });
+
+  // Safety reset on mount (handles hot reload)
+  useEffect(() => {
+    setIsCameraActive(false);
+    return () => {
+      setIsCameraActive(false);
+    };
+  }, []);
+
+  // Clear detection when camera is stopped
+  useEffect(() => {
+    if (!isCameraActive) {
+      onClearDetection();
+    }
+  }, [isCameraActive, onClearDetection]);
 
   // ─── Permission: not yet determined ───────────────────────────────────────
   if (!permission) {
@@ -141,7 +159,13 @@ export default function CameraDetectionScreen({
 
         {/* CameraView always mounted — never unmounts */}
         <View style={{ flex: 1 }}>
-          <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+          <CameraView 
+            key={`camera-${permission?.granted}`}
+            ref={cameraRef} 
+            style={styles.camera} 
+            facing="back" 
+            active={isCameraActive} 
+          />
 
           {/* Detection overlay */}
           <View style={styles.overlay}>
@@ -174,7 +198,7 @@ export default function CameraDetectionScreen({
               ]}
             />
 
-            {!hasDetection && (
+            {!hasDetection && isCameraActive && (
               <View style={styles.waitingOverlay}>
                 <Text
                   style={[
@@ -229,16 +253,7 @@ export default function CameraDetectionScreen({
         ]}
       >
         <View style={styles.resultRow}>
-          {!isCameraActive ? (
-            <View>
-              <Text style={[styles.waitingTitle, { color: theme.mutedText }]}>
-                Camera Stopped
-              </Text>
-              <Text style={[styles.resultSub, { color: theme.mutedText }]}>
-                Ready to scan when you are
-              </Text>
-            </View>
-          ) : hasDetection ? (
+          {hasDetection ? (
             <View>
               <Text
                 style={[styles.detectionLabel, { color: theme.primaryText }]}
@@ -247,6 +262,15 @@ export default function CameraDetectionScreen({
               </Text>
               <Text style={[styles.resultSub, { color: theme.mutedText }]}>
                 {detection.confidence}% confidence
+              </Text>
+            </View>
+          ) : !isCameraActive ? (
+            <View>
+              <Text style={[styles.waitingTitle, { color: theme.mutedText }]}>
+                Camera Stopped
+              </Text>
+              <Text style={[styles.resultSub, { color: theme.mutedText }]}>
+                Ready to scan when you are
               </Text>
             </View>
           ) : (
