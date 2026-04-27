@@ -32,6 +32,8 @@ export interface Detection {
   /** 🔌 Base64 or URI of the detection thumbnail */
   thumbnail?: string;
   boundingBoxes?: BoundingBox[];
+  /** Populated when status === 'ambiguous' — alternative labels from matchAndScore */
+  suggestions?: string[];
 }
 
 export interface SuggestionMatch {
