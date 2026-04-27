@@ -19,6 +19,7 @@ interface UseDetectionLoopOptions {
 interface UseDetectionLoopReturn {
   isModelReady: boolean;
   modelError: string | null;
+  modelLoadProgress: string | null;
 }
 
 export function useDetectionLoop({
@@ -29,6 +30,7 @@ export function useDetectionLoop({
 }: UseDetectionLoopOptions): UseDetectionLoopReturn {
   const [isModelReady, setIsModelReady] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [modelLoadProgress, setModelLoadProgress] = useState<string | null>("Initialising…");
   const isRunningRef = useRef(false);
   const frameCountRef = useRef(0);
   const isLoopActiveRef = useRef(false); // Track if loop is actually running
@@ -37,17 +39,22 @@ export function useDetectionLoop({
   useEffect(() => {
     let cancelled = false;
     console.log("[Loop] 📦 Loading model...");
+    setModelLoadProgress("Loading TFLite model…");
     detectionEngine
       .loadModel()
       .then(() => { 
         if (!cancelled) {
           console.log("[Loop] ✅ Model loaded successfully");
+          setModelLoadProgress("Model ready");
           setIsModelReady(true);
         }
       })
       .catch((err) => {
         console.error("[Loop] ❌ model load failed:", err);
-        if (!cancelled) setModelError(`Failed to load model: ${err}`);
+        if (!cancelled) {
+          setModelLoadProgress(null);
+          setModelError(`Failed to load model: ${err}`);
+        }
       });
     return () => {
       cancelled = true;
@@ -94,15 +101,44 @@ export function useDetectionLoop({
         frameCountRef.current++;
         const frameStart = Date.now();
 
-        // 1. Capture frame from camera (no skipProcessing — needed for correct orientation)
+        // 1. Capture frame from camera with retry logic
+        // takePictureAsync can timeout, so retry with exponential backoff
         const captureStart = Date.now();
-        console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - Calling takePictureAsync...`);
-        const photo = await cameraRef.current.takePictureAsync({ quality: 0.4 });
+        let photo: any = null;
+        let lastError: Error | null = null;
+        
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            if (attempt > 1) {
+              console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - Retry attempt ${attempt}/3...`);
+            }
+            
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error(`attempt ${attempt} timeout`)), 5000)
+            );
+            photo = await Promise.race([
+              cameraRef.current!.takePictureAsync({ quality: 0.4 }),
+              timeoutPromise
+            ]);
+            
+            if (photo?.uri) break; // Success
+          } catch (err) {
+            lastError = err as Error;
+            if (attempt < 3) {
+              const delayMs = 50 * Math.pow(2, attempt - 1); // 50ms, 100ms, 200ms
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+          }
+        }
+        
         const captureTime = Date.now() - captureStart;
-        console.log(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - takePictureAsync returned in ${captureTime}ms, uri=${!!photo?.uri}`);
 
         if (!photo?.uri) {
-          console.warn("[Loop] ❌ Frame #" + frameCountRef.current + " - takePictureAsync returned no URI");
+          if (captureTime >= 4500) {
+            console.warn(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - ❌ takePictureAsync timed out after ${captureTime}ms`);
+          } else {
+            console.warn(`[Loop] TICK #${tickCount}, Frame #${frameCountRef.current} - ❌ takePictureAsync failed: ${lastError?.message}`);
+          }
           return;
         }
 
@@ -183,5 +219,5 @@ export function useDetectionLoop({
     };
   }, [isModelReady, isActive, onDetectionResult, throttleMs]);
 
-  return { isModelReady, modelError };
+  return { isModelReady, modelError, modelLoadProgress };
 }

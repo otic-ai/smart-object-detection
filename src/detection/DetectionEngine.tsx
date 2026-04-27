@@ -29,9 +29,12 @@ const INPUT_SIZE = 640;
 class DetectionEngine {
   private model: TensorflowModel | null = null;
   private isLoaded = false;
+  private isLoading = false;  // ← add this
+
 
   async loadModel(): Promise<void> {
     if (this.isLoaded) return;
+    if (this.isLoading) return;  // ← add this guard
     try {
       this.model = await loadTensorflowModel(
         // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -40,6 +43,7 @@ class DetectionEngine {
       this.isLoaded = true;
       console.log("[DetectionEngine] ✅ Model loaded");
     } catch (err) {
+      this.isLoading = false;  // ← reset on failure too
       console.error("[DetectionEngine] ❌ Failed to load model:", err);
       throw err;
     }
@@ -125,9 +129,15 @@ class DetectionEngine {
   }
 
   dispose(): void {
-    this.model = null;
+    if (this.model) {
+      // react-native-fast-tflite models don't need explicit teardown,
+      // but we clear references so the next loadModel() call re-initialises.
+      this.model = null;
+    }
     this.isLoaded = false;
-    console.log("[DetectionEngine] Model disposed");
+    this.isLoading = false;  // ← reset this too
+    console.log("[DetectionEngine] Disposed");
+    console.log("[DetectionEngine] Model disposed — will reload on next loadModel() call");
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────

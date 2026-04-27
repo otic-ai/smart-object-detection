@@ -11,8 +11,8 @@
  *   2. Pass frames to on-device YOLOv8 / TFLite model (react-native-fast-tflite)
  *   3. Call `onDetectionResult(detection, boxes)` with model output each frame
  */
-import React, { useRef, useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import React, { useRef, useState, useEffect, useCallback } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Easing } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -52,18 +52,47 @@ export default function CameraDetectionScreen({
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null); // 🔌 use cameraRef for frame capture
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const { isModelReady, modelError } = useDetectionLoop({
+  const [isCameraReady, setIsCameraReady] = useState(false);
+
+  const mountIdRef = useRef(Date.now());
+  
+  const { isModelReady, modelError, modelLoadProgress } = useDetectionLoop({
     onDetectionResult,
-    isActive: isCameraActive,
+    isActive: isCameraActive && isCameraReady, // Only start when BOTH active AND ready
     cameraRef,
     throttleMs: 500, // 2 FPS - allow more time for all async operations
   });
 
+  // Spinner animation for model loading
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (isModelReady) return;
+    const loop = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 900,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [isModelReady, spinAnim]);
+  const spinInterpolate = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
   // Safety reset on mount (handles hot reload)
   useEffect(() => {
+    console.log("[Camera] Component mounted - resetting states");
     setIsCameraActive(false);
+    setIsCameraReady(false);
+     mountIdRef.current = Date.now(); // refresh the key too
     return () => {
+      console.log("[Camera] Component unmounting - resetting states");
       setIsCameraActive(false);
+      setIsCameraReady(false);
     };
   }, []);
 
@@ -71,10 +100,13 @@ export default function CameraDetectionScreen({
   useEffect(() => {
     if (!isCameraActive) {
       onClearDetection();
+      setIsCameraReady(false);
+      console.log("[Camera] Camera deactivated - clearing detection and ready state");
     }
   }, [isCameraActive, onClearDetection]);
 
   // ─── Permission: not yet determined ───────────────────────────────────────
+  // Show permission screen only if not granted
   if (!permission) {
     return (
       <View style={[styles.root, { backgroundColor: theme.background }]}>
@@ -143,28 +175,71 @@ export default function CameraDetectionScreen({
               },
             ]}
           >
-            <MaterialCommunityIcons
-              name="camera-off"
-              size={64}
-              color={theme.mutedText}
-            />
-            <Text style={[styles.inactiveTitle, { color: theme.primaryText }]}>
-              Camera Paused
-            </Text>
-            <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>
-              Press Start to begin scanning
-            </Text>
+            {!isModelReady && !modelError ? (
+              /* ── Model still loading ── */
+              <>
+                <Animated.View
+                  style={[
+                    styles.modelLoadingRing,
+                    {
+                      borderTopColor: theme.primary,
+                      borderColor: theme.border,
+                      transform: [{ rotate: spinInterpolate }],
+                    },
+                  ]}
+                />
+                <Text style={[styles.inactiveTitle, { color: theme.primaryText, marginTop: 20 }]}>
+                  Loading Model…
+                </Text>
+                <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>
+                  {modelLoadProgress ?? "Initialising YOLOv8"}
+                </Text>
+              </>
+            ) : modelError ? (
+              /* ── Model failed to load ── */
+              <>
+                <MaterialCommunityIcons name="alert-circle-outline" size={64} color={theme.error} />
+                <Text style={[styles.inactiveTitle, { color: theme.error }]}>
+                  Model Failed to Load
+                </Text>
+                <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>
+                  {modelError}
+                </Text>
+              </>
+            ) : (
+              /* ── Model ready, camera paused ── */
+              <>
+                <MaterialCommunityIcons
+                  name="camera-off"
+                  size={64}
+                  color={theme.mutedText}
+                />
+                <Text style={[styles.inactiveTitle, { color: theme.primaryText }]}>
+                  Camera Paused
+                </Text>
+                <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>
+                  Press Start to begin scanning
+                </Text>
+              </>
+            )}
           </View>
         )}
 
         {/* CameraView always mounted — never unmounts */}
         <View style={{ flex: 1 }}>
           <CameraView 
-            key={`camera-${permission?.granted}`}
+            key={`camera-${mountIdRef.current}`}
             ref={cameraRef} 
             style={styles.camera} 
             facing="back" 
-            active={isCameraActive} 
+            active={isCameraActive}
+            onCameraReady={() => {
+              console.log("[Camera] ✅ onCameraReady fired — hardware ready");
+              setTimeout(() => {
+                console.log("[Camera] ✅ settle delay done — marking ready for capture");
+                setIsCameraReady(true);
+              }, 500);
+            }} 
           />
 
           {/* Detection overlay */}
@@ -267,10 +342,12 @@ export default function CameraDetectionScreen({
           ) : !isCameraActive ? (
             <View>
               <Text style={[styles.waitingTitle, { color: theme.mutedText }]}>
-                Camera Stopped
+                {!isModelReady && !modelError ? "Loading Model…" : "Camera Stopped"}
               </Text>
               <Text style={[styles.resultSub, { color: theme.mutedText }]}>
-                Ready to scan when you are
+                {!isModelReady && !modelError
+                  ? modelLoadProgress ?? "Initialising YOLOv8"
+                  : "Ready to scan when you are"}
               </Text>
             </View>
           ) : (
@@ -290,12 +367,30 @@ export default function CameraDetectionScreen({
         <View style={styles.actions}>
           {!isCameraActive ? (
             <TouchableOpacity
-              style={[styles.btnPrimary, { backgroundColor: theme.primary }]}
-              activeOpacity={0.8}
-              onPress={() => setIsCameraActive(true)}
+              style={[
+                styles.btnPrimary,
+                {
+                  backgroundColor: isModelReady && !modelError
+                    ? theme.primary
+                    : theme.surface,
+                  borderWidth: isModelReady && !modelError ? 0 : 1,
+                  borderColor: theme.border,
+                  opacity: isModelReady && !modelError ? 1 : 0.6,
+                },
+              ]}
+              activeOpacity={isModelReady && !modelError ? 0.8 : 1}
+              onPress={() => {
+                if (isModelReady && !modelError) setIsCameraActive(true);
+              }}
+              disabled={!isModelReady || !!modelError}
             >
-              <Text style={[styles.btnPrimaryText, { color: "#0E0E0E" }]}>
-                Start Scanning
+              <Text
+                style={[
+                  styles.btnPrimaryText,
+                  { color: isModelReady && !modelError ? "#0E0E0E" : theme.mutedText },
+                ]}
+              >
+                {!isModelReady && !modelError ? "Model Loading…" : "Start Scanning"}
               </Text>
             </TouchableOpacity>
           ) : (
@@ -403,6 +498,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 12,
+  },
+  modelLoadingRing: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 4,
+    // borderTopColor set inline via theme.primary
+    // borderColor (the other 3 sides) set inline via theme.border
   },
   inactiveTitle: {
     fontSize: 20,
