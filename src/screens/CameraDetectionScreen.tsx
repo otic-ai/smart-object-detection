@@ -29,9 +29,9 @@ type Props = NavigationProps & {
   boundingBoxes: BoundingBox[];
   /**
    * 🔌 AI INTEGRATION POINT — call this from the YOLOv8 / TFLite model
-   * on each processed frame.
+   * + feature extraction pipeline on each processed frame.
    */
-  onDetectionResult: (detection: Detection, boxes: BoundingBox[]) => void;
+  onDetectionResult: (input: NormalizationInput, boxes: BoundingBox[]) => void;
   /** Called when the user confirms the current detection is correct. */
   onConfirm: () => void;
   /** Called when the camera is stopped to clear old detection results. */
