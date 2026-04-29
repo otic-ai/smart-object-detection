@@ -86,6 +86,12 @@ export default function App() {
     setActiveBoundingBoxes([]);
   }, [activeDetection]);
 
+  /** Clear active detection (called when camera stops) */
+  const clearDetection = useCallback(() => {
+    setActiveDetection(null);
+    setActiveBoundingBoxes([]);
+  }, []);
+
   /** User saved a correction from the Learn screen — saves corrected entry to history. */
   const onSaveCorrection = useCallback((correctedLabel: string) => {
     if (!activeDetection) return;
@@ -111,6 +117,7 @@ export default function App() {
           boundingBoxes={activeBoundingBoxes}
           onDetectionResult={onDetectionResult}
           onConfirm={onConfirmDetection}
+          onClearDetection={clearDetection}
         />
       )}
       {route === 'learn' && (
