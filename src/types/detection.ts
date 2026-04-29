@@ -32,18 +32,8 @@ export interface Detection {
   /** 🔌 Base64 or URI of the detection thumbnail */
   thumbnail?: string;
   boundingBoxes?: BoundingBox[];
-  /** Raw model class before normalization (for debugging / analytics). */
-  rawClass?: string;
-  /** Canonical identity selected by normalization. */
-  normalizedName?: string;
-  /** Optional OCR text used in pipeline scoring. */
-  ocrText?: string;
-  /** Optional dominant color used in pipeline scoring. */
-  dominantColor?: string;
-  /** Layer-4 scoring visibility for debugging and tuning. */
-  scoreBreakdown?: ScoreBreakdown;
-  /** Suggested matches when confidence is mid-range. */
-  suggestions?: NormalizationCandidate[];
+  /** Populated when status === 'ambiguous' — alternative labels from matchAndScore */
+  suggestions?: string[];
 }
 
 export interface SuggestionMatch {
