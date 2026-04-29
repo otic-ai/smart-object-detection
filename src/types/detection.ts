@@ -43,3 +43,42 @@ export interface SuggestionMatch {
   iconName: string;       // MaterialCommunityIcons name
   confidence: number;     // 0–100
 }
+
+/**
+ * Layer-2 output consumed by normalization.
+ * This shape can be built from detector + feature extraction outputs.
+ */
+export interface NormalizationInput {
+  className: string;
+  confidence: number; // 0-100
+  ocrText?: string;
+  dominantColor?: string;
+  timestamp?: string;
+}
+
+/** Candidate object identity considered by normalization/matching. */
+export interface NormalizationCandidate {
+  label: string;
+  normalizedName: string;
+  colorHint?: string;
+  aliases: string[];
+}
+
+/** Weighted scoring parts for Layer 4. */
+export interface ScoreBreakdown {
+  ocrSimilarity: number; // 0-100, weighted 50%
+  classMatch: number; // 0-100, weighted 20%
+  colorMatch: number; // 0-100, weighted 10%
+  historicalMatch: number; // 0-100, weighted 20%
+  total: number; // 0-100
+}
+
+/** Normalization + matching output consumed by App state. */
+export interface NormalizationResult {
+  label: string;
+  normalizedName: string;
+  confidence: number; // 0-100
+  status: DetectionStatus;
+  scoreBreakdown: ScoreBreakdown;
+  suggestions: NormalizationCandidate[];
+}
