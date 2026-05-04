@@ -76,6 +76,29 @@ npx expo start
 
 Then press `a` for Android, `i` for iOS simulator, or scan the QR code with **Expo Go**.
 
+### Run on a USB-connected Android device
+
+From the project root, with the device connected by USB and USB debugging enabled:
+
+```bash
+# Confirm the device is visible
+adb devices
+
+# Start the Metro/Expo server
+npx expo start --localhost --clear
+
+# In another terminal, connect the device to Metro
+adb reverse tcp:8081 tcp:8081
+
+# Rebuild and install the debug app for the connected device ABI
+npx expo run:android --variant debug --active-arch-only
+
+# Launch the installed app
+adb shell monkey -p com.otic.syntheticeye -c android.intent.category.LAUNCHER 1
+```
+
+For this project, the package name is `com.otic.syntheticeye`.
+
 ---
 
 ## Project Structure
