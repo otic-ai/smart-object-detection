@@ -115,18 +115,35 @@ export default function CorrectionLearningScreen({
           />
         </View>
 
-        {/* Suggestions — empty until real similarity search is wired */}
+        {/* AI Suggestions — populated by matchAndScore() when status is 'ambiguous' */}
         <Text style={[styles.suggestionsHeading, { color: theme.mutedText }]}>
           AI SUGGESTIONS
         </Text>
-        {/* 🔌 AI INTEGRATION POINT — replace this with SuggestionCard components
-             driven by a real similarity search against your object database */}
-        <View style={[styles.emptySuggestions, { borderColor: theme.border }]}>
-          <MaterialCommunityIcons name="magnify" size={20} color={theme.mutedText} />
-          <Text style={[styles.emptySuggestionsText, { color: theme.mutedText }]}>
-            No suggestions yet — connect similarity search
-          </Text>
-        </View>
+        {currentDetection.suggestions && currentDetection.suggestions.length > 0 ? (
+          <View style={styles.suggestionsList}>
+            {currentDetection.suggestions.map(suggestion => (
+              <TouchableOpacity
+                key={suggestion}
+                style={[styles.suggestionChip, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                onPress={() => setSearchText(suggestion)}
+                activeOpacity={0.7}
+              >
+                <MaterialCommunityIcons name="cube-outline" size={16} color={theme.secondary} />
+                <Text style={[styles.suggestionText, { color: theme.primaryText }]}>
+                  {suggestion}
+                </Text>
+                <MaterialCommunityIcons name="arrow-top-left" size={14} color={theme.mutedText} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : (
+          <View style={[styles.emptySuggestions, { borderColor: theme.border }]}>
+            <MaterialCommunityIcons name="check-circle-outline" size={20} color={theme.mutedText} />
+            <Text style={[styles.emptySuggestionsText, { color: theme.mutedText }]}>
+              No alternatives — detection was high-confidence
+            </Text>
+          </View>
+        )}
 
         {/* Feedback notice */}
         <View style={[styles.notice, { backgroundColor: theme.secondary + '12', borderColor: theme.secondary + '30' }]}>
@@ -224,6 +241,26 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 1.2,
+  },
+
+  // Suggestion chips from matchAndScore
+  suggestionsList: {
+    gap: 8,
+  },
+  suggestionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  suggestionText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    textTransform: 'capitalize',
   },
 
   // Search
