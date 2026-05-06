@@ -1,8 +1,6 @@
 import { loadTensorflowModel, TensorflowModel } from "react-native-fast-tflite";
 import { COCO_LABELS } from "./labels";
-// jpeg-js: pure JS JPEG decoder. Pass useTArray:true to avoid Buffer (not in Hermes).
 import * as jpegJs from "jpeg-js";
-// base64-arraybuffer: pure JS base64 → ArrayBuffer, no Buffer/TextDecoder needed.
 import { decode as decodeBase64 } from "base64-arraybuffer";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -29,24 +27,46 @@ const INPUT_SIZE = 640;
 class DetectionEngine {
   private model: TensorflowModel | null = null;
   private isLoaded = false;
-  private isLoading = false;  // ← add this
 
+  /**
+   * _loadPromise caches the in-flight load so that:
+   *  - Multiple callers awaiting loadModel() share the same Promise (no duplicate loads)
+   *  - App.tsx can fire loadModel() eagerly on startup; useDetectionLoop just awaits the same promise
+   *  - On failure the promise is cleared so a retry is possible
+   */
+  private _loadPromise: Promise<void> | null = null;
 
   async loadModel(): Promise<void> {
+    // Already loaded — resolve immediately
     if (this.isLoaded) return;
-    if (this.isLoading) return;  // ← add this guard
-    try {
-      this.model = await loadTensorflowModel(
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        require("../../assets/models/yolov8n_float32.tflite")
-      );
-      this.isLoaded = true;
-      console.log("[DetectionEngine] ✅ Model loaded");
-    } catch (err) {
-      this.isLoading = false;  // ← reset on failure too
-      console.error("[DetectionEngine] ❌ Failed to load model:", err);
-      throw err;
-    }
+
+    // Already loading — return the same in-flight promise (no duplicate loads)
+    if (this._loadPromise) return this._loadPromise;
+
+    this._loadPromise = (async () => {
+      try {
+        console.log("[DetectionEngine] 📦 Starting model load...");
+        const loadStart = Date.now();
+        this.model = await loadTensorflowModel(
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          require("../../assets/models/yolov8n_float32.tflite")
+        );
+        this.isLoaded = true;
+        const loadMs = Date.now() - loadStart;
+        console.log(`[DetectionEngine] ✅ Model loaded in ${loadMs}ms`);
+      } catch (err) {
+        // Clear promise so caller can retry
+        this._loadPromise = null;
+        console.error("[DetectionEngine] ❌ Failed to load model:", err);
+        throw err;
+      }
+    })();
+
+    return this._loadPromise;
+  }
+
+  get ready(): boolean {
+    return this.isLoaded;
   }
 
   /**
@@ -76,8 +96,6 @@ class DetectionEngine {
       const decodeTime = Date.now() - decodeStart;
 
       // Step 2: ArrayBuffer → raw RGBA Uint8Array via jpeg-js
-      // useTArray:true → output is Uint8Array instead of Buffer (Hermes safe)
-      // formatAsRGBA:true (default) → 4 bytes per pixel: R, G, B, A
       const jpegStart = Date.now();
       const decoded = jpegJs.decode(new Uint8Array(arrayBuffer), {
         useTArray: true,
@@ -91,7 +109,9 @@ class DetectionEngine {
       const detectTime = Date.now() - detectStart;
 
       const totalTime = Date.now() - startTime;
-      console.log(`[DetectionEngine] Base64→Detect timing: Base64Decode=${decodeTime}ms, JPEGDecode=${jpegTime}ms, Detect=${detectTime}ms, Total=${totalTime}ms`);
+      console.log(
+        `[DetectionEngine] 🖼️  Frame | b64=${decodeTime}ms  jpeg=${jpegTime}ms  infer=${detectTime}ms  TOTAL=${totalTime}ms`
+      );
 
       return results;
     } catch (err) {
@@ -106,7 +126,7 @@ class DetectionEngine {
     frameHeight: number
   ): Promise<DetectionEngineResult[]> {
     if (!this.isLoaded || !this.model) return [];
-    
+
     const startTime = Date.now();
 
     const prepStart = Date.now();
@@ -123,21 +143,18 @@ class DetectionEngine {
     const parseTime = Date.now() - parseStart;
 
     const totalTime = Date.now() - startTime;
-    console.log(`[DetectionEngine] Detect timing: Preprocess=${prepTime}ms, Inference=${inferenceTime}ms, Parse=${parseTime}ms, Total=${totalTime}ms`);
+    console.log(
+      `[DetectionEngine] 🧠 Inference | preprocess=${prepTime}ms  run=${inferenceTime}ms  parse=${parseTime}ms  TOTAL=${totalTime}ms`
+    );
 
     return results;
   }
 
   dispose(): void {
-    if (this.model) {
-      // react-native-fast-tflite models don't need explicit teardown,
-      // but we clear references so the next loadModel() call re-initialises.
-      this.model = null;
-    }
+    this.model = null;
     this.isLoaded = false;
-    this.isLoading = false;  // ← reset this too
-    console.log("[DetectionEngine] Disposed");
-    console.log("[DetectionEngine] Model disposed — will reload on next loadModel() call");
+    this._loadPromise = null;
+    console.log("[DetectionEngine] Disposed — will reload on next loadModel() call");
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -151,16 +168,21 @@ class DetectionEngine {
     const input = new Float32Array(OUT * OUT * 3);
     const scaleX = srcW / OUT;
     const scaleY = srcH / OUT;
+    const inv255 = 1 / 255;
 
     for (let y = 0; y < OUT; y++) {
+      const srcY = Math.min((y * scaleY) | 0, srcH - 1);
+      const srcYOffset = srcY * srcW;
+      const dstYOffset = y * OUT;
+
       for (let x = 0; x < OUT; x++) {
-        const srcX = Math.min(Math.floor(x * scaleX), srcW - 1);
-        const srcY = Math.min(Math.floor(y * scaleY), srcH - 1);
-        const srcIdx = (srcY * srcW + srcX) * 4;
-        const dstIdx = (y * OUT + x) * 3;
-        input[dstIdx]     = rgba[srcIdx]     / 255;
-        input[dstIdx + 1] = rgba[srcIdx + 1] / 255;
-        input[dstIdx + 2] = rgba[srcIdx + 2] / 255;
+        const srcX = Math.min((x * scaleX) | 0, srcW - 1);
+        const srcIdx = (srcYOffset + srcX) << 2; // *4 via bitshift
+        const dstIdx = (dstYOffset + x) * 3;
+
+        input[dstIdx]     = rgba[srcIdx]     * inv255;
+        input[dstIdx + 1] = rgba[srcIdx + 1] * inv255;
+        input[dstIdx + 2] = rgba[srcIdx + 2] * inv255;
       }
     }
     return input;
@@ -172,19 +194,22 @@ class DetectionEngine {
     const raw: DetectionEngineResult[] = [];
 
     for (let i = 0; i < NUM_ANCHORS; i++) {
-      const cx = data[0 * NUM_ANCHORS + i];
-      const cy = data[1 * NUM_ANCHORS + i];
-      const w  = data[2 * NUM_ANCHORS + i];
-      const h  = data[3 * NUM_ANCHORS + i];
-
       let maxScore = 0;
       let classIdx = 0;
       for (let c = 0; c < NUM_CLASSES; c++) {
         const score = data[(4 + c) * NUM_ANCHORS + i];
-        if (score > maxScore) { maxScore = score; classIdx = c; }
+        if (score > maxScore) {
+          maxScore = score;
+          classIdx = c;
+        }
       }
 
       if (maxScore < CONFIDENCE_THRESHOLD) continue;
+
+      const cx = data[0 * NUM_ANCHORS + i];
+      const cy = data[1 * NUM_ANCHORS + i];
+      const w  = data[2 * NUM_ANCHORS + i];
+      const h  = data[3 * NUM_ANCHORS + i];
 
       raw.push({
         label: COCO_LABELS[classIdx] ?? "unknown",
@@ -232,3 +257,15 @@ class DetectionEngine {
 }
 
 export const detectionEngine = new DetectionEngine();
+
+/**
+ * Call this once at app startup (e.g. App.tsx / _layout.tsx) so the model
+ * is warm by the time the user reaches the camera tab.
+ *
+ * Safe to call multiple times — returns the same cached Promise.
+ */
+export function preloadModel(): void {
+  detectionEngine.loadModel().catch((err) =>
+    console.warn("[DetectionEngine] Background preload failed:", err)
+  );
+}

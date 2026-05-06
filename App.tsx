@@ -15,19 +15,22 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AppRoute } from './src/types/navigation';
-import { BoundingBox, Detection, NormalizationInput } from './src/types/detection';
-import { normalizeDetection } from './src/pipeline/normalization';
+import { BoundingBox, Detection } from './src/types/detection';
+import { preloadModel } from './src/detection/DetectionEngine';
 import MobileBottomNav from './src/components/MobileBottomNav';
 import CameraDetectionScreen from './src/screens/CameraDetectionScreen';
 import CorrectionLearningScreen from './src/screens/CorrectionLearningScreen';
 import DetectionHistoryScreen from './src/screens/DetectionHistoryScreen';
+
+// ── Kick off model load immediately at module init time ──────────────────────
+// By the time the user taps the Scan tab, the model is already warm.
+preloadModel();
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>('scan');
   const routeHistoryRef = useRef<AppRoute[]>([]);
 
   // ─── Shared detection state ────────────────────────────────────────────────
-  // Starts null / empty. The YOLOv8 model populates these via onDetectionResult.
   const [activeDetection, setActiveDetection] = useState<Detection | null>(null);
   const [activeBoundingBoxes, setActiveBoundingBoxes] = useState<BoundingBox[]>([]);
   const [detectionHistory, setDetectionHistory] = useState<Detection[]>([]);
@@ -47,33 +50,12 @@ export default function App() {
   // ─── Detection callbacks ───────────────────────────────────────────────────
 
   /**
-   * Layer-3/4 pipeline hook.
-   * Feed raw model + feature signals here on each processed frame.
+   * Called by useDetectionLoop on each processed frame.
+   * useDetectionLoop already builds a fully-formed Detection — just lift it
+   * into shared state here. Normalization (Layer 3/4) runs inside the loop.
    */
-  const onDetectionResult = useCallback((input: NormalizationInput, boxes: BoundingBox[]) => {
-    const normalized = normalizeDetection(input);
-
-    const timestamp = input.timestamp ?? new Date().toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-    const mapped: Detection = {
-      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      label: normalized.normalizedName !== 'unknown' ? normalized.normalizedName : input.className,
-      confidence: normalized.confidence,
-      status: normalized.status,
-      timestamp,
-      rawClass: input.className,
-      normalizedName: normalized.normalizedName,
-      ocrText: input.ocrText,
-      dominantColor: input.dominantColor,
-      scoreBreakdown: normalized.scoreBreakdown,
-      suggestions: normalized.suggestions,
-      boundingBoxes: boxes,
-    };
-
-    setActiveDetection(mapped);
+  const onDetectionResult = useCallback((detection: Detection, boxes: BoundingBox[]) => {
+    setActiveDetection(detection);
     setActiveBoundingBoxes(boxes);
   }, []);
 
@@ -86,7 +68,7 @@ export default function App() {
     setActiveBoundingBoxes([]);
   }, [activeDetection]);
 
-  /** Clear active detection (called when camera stops) */
+  /** Clear active detection (called when camera stops). */
   const clearDetection = useCallback(() => {
     setActiveDetection(null);
     setActiveBoundingBoxes([]);
@@ -140,4 +122,3 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
-
