@@ -22,6 +22,10 @@ import CameraDetectionScreen from './src/screens/CameraDetectionScreen';
 import CorrectionLearningScreen from './src/screens/CorrectionLearningScreen';
 import DetectionHistoryScreen from './src/screens/DetectionHistoryScreen';
 
+// ── Kick off model load immediately at module init time ──────────────────────
+// By the time the user taps the Scan tab, the model is already warm.
+preloadModel();
+
 export default function App() {
   const [route, setRoute] = useState<AppRoute>('scan');
   const routeHistoryRef = useRef<AppRoute[]>([]);
@@ -111,7 +115,7 @@ export default function App() {
     setActiveBoundingBoxes([]);
   }, [activeDetection]);
 
-  /** Clear active detection (called when camera stops) */
+  /** Clear active detection (called when camera stops). */
   const clearDetection = useCallback(() => {
     setActiveDetection(null);
     setActiveBoundingBoxes([]);
@@ -169,4 +173,3 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
-
