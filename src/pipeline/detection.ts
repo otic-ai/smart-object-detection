@@ -34,9 +34,9 @@ export interface Detection {
   boundingBoxes?: BoundingBox[];
   /** Populated when status === 'ambiguous' — alternative labels from matchAndScore */
   suggestions?: string[];
-  /** OCR text extracted from the detected object region */
+  /** OCR text extracted from the detected object region (Feature Extraction Layer) */
   ocrText?: string;
-  /** Dominant colour of the detected object region */
+  /** Dominant colour of the detected object region (Feature Extraction Layer) */
   dominantColor?: string;
 }
 

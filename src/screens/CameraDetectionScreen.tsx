@@ -30,20 +30,20 @@ import TopAppBar from "../components/TopAppBar";
 import { useDetectionLoop } from "../detection/useDetectionLoop";
 
 type Props = NavigationProps & {
-  /** Active detection from the model pipeline. Null = no detection yet. */
   detection: Detection | null;
-  /** Bounding boxes for the current frame, emitted by the model. */
   boundingBoxes: BoundingBox[];
-  /**
-   * 🔌 AI INTEGRATION POINT — called by useDetectionLoop on each processed frame.
-   * Receives a fully-formed Detection (label, confidence, status, boundingBoxes).
-   */
   onDetectionResult: (detection: Detection, boxes: BoundingBox[]) => void;
-  /** Called when the user confirms the current detection is correct. */
   onConfirm: () => void;
-  /** Called when the camera is stopped to clear old detection results. */
   onClearDetection: () => void;
 };
+
+// Status → colour pill config
+const STATUS_CONFIG = {
+  verified:  { label: "Verified",  color: "#22C55E" },
+  ambiguous: { label: "Ambiguous", color: "#F59E0B" },
+  corrected: { label: "Corrected", color: "#3B82F6" },
+  unknown:   { label: "Unknown",   color: "#6B7280" },
+} as const;
 
 export default function CameraDetectionScreen({
   navigateTo,
@@ -152,22 +152,19 @@ export default function CameraDetectionScreen({
   }
 
   // ─── Permission: granted ─────────────────────────────────────────────────────
+  const statusCfg = detection ? STATUS_CONFIG[detection.status] ?? STATUS_CONFIG.unknown : null;
+
   return (
     <View style={[styles.root, { backgroundColor: theme.background }]}>
       <TopAppBar />
 
       {/* ─── Camera viewport ─────────────────────────────────────────────── */}
       <View style={styles.cameraContainer}>
-        {/* Inactive overlay */}
         {!isCameraActive && (
           <View
             style={[
               styles.inactiveCamera,
-              {
-                backgroundColor: theme.surface,
-                ...StyleSheet.absoluteFillObject,
-                zIndex: 20,
-              },
+              { backgroundColor: theme.surface, ...StyleSheet.absoluteFillObject, zIndex: 20 },
             ]}
           >
             {!isModelReady && !modelError ? (
@@ -192,28 +189,19 @@ export default function CameraDetectionScreen({
             ) : modelError ? (
               <>
                 <MaterialCommunityIcons name="alert-circle-outline" size={64} color={theme.error} />
-                <Text style={[styles.inactiveTitle, { color: theme.error }]}>
-                  Model Failed to Load
-                </Text>
-                <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>
-                  {modelError}
-                </Text>
+                <Text style={[styles.inactiveTitle, { color: theme.error }]}>Model Failed to Load</Text>
+                <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>{modelError}</Text>
               </>
             ) : (
               <>
                 <MaterialCommunityIcons name="camera-off" size={64} color={theme.mutedText} />
-                <Text style={[styles.inactiveTitle, { color: theme.primaryText }]}>
-                  Camera Paused
-                </Text>
-                <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>
-                  Press Start to begin scanning
-                </Text>
+                <Text style={[styles.inactiveTitle, { color: theme.primaryText }]}>Camera Paused</Text>
+                <Text style={[styles.inactiveSub, { color: theme.mutedText }]}>Press Start to begin scanning</Text>
               </>
             )}
           </View>
         )}
 
-        {/* CameraView — always mounted, never unmounts */}
         <View style={{ flex: 1 }}>
           <CameraView
             key={`camera-${mountIdRef.current}`}
@@ -221,12 +209,10 @@ export default function CameraDetectionScreen({
             style={styles.camera}
             facing="back"
             active={isCameraActive}
-            onCameraReady={() => {
-              setTimeout(() => setIsCameraReady(true), 500);
-            }}
+            pictureSize="640x480"
+            onCameraReady={() => { setTimeout(() => setIsCameraReady(true), 500); }}
           />
 
-          {/* Detection overlay */}
           <View style={styles.overlay}>
             <View style={[styles.corner, styles.topLeft,    { borderColor: theme.primary }]} />
             <View style={[styles.corner, styles.topRight,   { borderColor: theme.primary }]} />
@@ -277,40 +263,82 @@ export default function CameraDetectionScreen({
           },
         ]}
       >
-        <View style={styles.resultRow}>
-          {hasDetection ? (
-            <View>
+        {hasDetection ? (
+          <>
+            {/* ── Row 1: Label + status pill ── */}
+            <View style={styles.detectionHeaderRow}>
               <Text style={[styles.detectionLabel, { color: theme.primaryText }]}>
                 {detection.label}
               </Text>
-              <Text style={[styles.resultSub, { color: theme.mutedText }]}>
-                {detection.confidence}% confidence
-              </Text>
+              {statusCfg && (
+                <View style={[styles.statusPill, { backgroundColor: statusCfg.color + "22", borderColor: statusCfg.color }]}>
+                  <Text style={[styles.statusPillText, { color: statusCfg.color }]}>
+                    {statusCfg.label}
+                  </Text>
+                </View>
+              )}
             </View>
-          ) : !isCameraActive ? (
-            <View>
-              <Text style={[styles.waitingTitle, { color: theme.mutedText }]}>
-                {!isModelReady && !modelError ? "Loading Model…" : "Camera Stopped"}
-              </Text>
-              <Text style={[styles.resultSub, { color: theme.mutedText }]}>
-                {!isModelReady && !modelError
-                  ? modelLoadProgress ?? "Initialising YOLOv8"
-                  : "Ready to scan when you are"}
-              </Text>
-            </View>
-          ) : (
-            <View>
-              <Text style={[styles.waitingTitle, { color: theme.mutedText }]}>
-                No detection
-              </Text>
-              <Text style={[styles.resultSub, { color: theme.mutedText }]}>
-                Waiting for camera feed…
-              </Text>
-            </View>
-          )}
-        </View>
 
-        {/* Action buttons */}
+            {/* ── Row 2: Confidence ── */}
+            <Text style={[styles.resultSub, { color: theme.mutedText }]}>
+              {detection.confidence}% confidence
+            </Text>
+
+            {/* ── Row 3: Feature chips (OCR + Colour) ── */}
+            {(detection.ocrText || detection.dominantColor) && (
+              <View style={styles.featureRow}>
+                {detection.ocrText && (
+                  <View style={[styles.featureChip, { backgroundColor: theme.border }]}>
+                    <MaterialCommunityIcons name="text-recognition" size={12} color={theme.mutedText} />
+                    <Text style={[styles.featureChipText, { color: theme.primaryText }]} numberOfLines={1}>
+                      {detection.ocrText}
+                    </Text>
+                  </View>
+                )}
+                {detection.dominantColor && (
+                  <View style={[styles.featureChip, { backgroundColor: theme.border }]}>
+                    <MaterialCommunityIcons name="palette-outline" size={12} color={theme.mutedText} />
+                    <Text style={[styles.featureChipText, { color: theme.primaryText }]}>
+                      {detection.dominantColor}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* ── Row 4: Suggestions (ambiguous only) ── */}
+            {detection.suggestions && detection.suggestions.length > 0 && (
+              <View style={styles.suggestionsRow}>
+                <Text style={[styles.suggestionsLabel, { color: theme.mutedText }]}>
+                  Could also be:
+                </Text>
+                {detection.suggestions.map((s, i) => (
+                  <View key={i} style={[styles.suggestionChip, { borderColor: theme.border }]}>
+                    <Text style={[styles.suggestionChipText, { color: theme.secondaryText }]}>{s}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </>
+        ) : !isCameraActive ? (
+          <View>
+            <Text style={[styles.waitingTitle, { color: theme.mutedText }]}>
+              {!isModelReady && !modelError ? "Loading Model…" : "Camera Stopped"}
+            </Text>
+            <Text style={[styles.resultSub, { color: theme.mutedText }]}>
+              {!isModelReady && !modelError
+                ? modelLoadProgress ?? "Initialising YOLOv8"
+                : "Ready to scan when you are"}
+            </Text>
+          </View>
+        ) : (
+          <View>
+            <Text style={[styles.waitingTitle, { color: theme.mutedText }]}>No detection</Text>
+            <Text style={[styles.resultSub, { color: theme.mutedText }]}>Waiting for camera feed…</Text>
+          </View>
+        )}
+
+        {/* ── Action buttons ── */}
         <View style={styles.actions}>
           {!isCameraActive ? (
             <TouchableOpacity
@@ -324,17 +352,10 @@ export default function CameraDetectionScreen({
                 },
               ]}
               activeOpacity={isModelReady && !modelError ? 0.8 : 1}
-              onPress={() => {
-                if (isModelReady && !modelError) setIsCameraActive(true);
-              }}
+              onPress={() => { if (isModelReady && !modelError) setIsCameraActive(true); }}
               disabled={!isModelReady || !!modelError}
             >
-              <Text
-                style={[
-                  styles.btnPrimaryText,
-                  { color: isModelReady && !modelError ? "#0E0E0E" : theme.mutedText },
-                ]}
-              >
+              <Text style={[styles.btnPrimaryText, { color: isModelReady && !modelError ? "#0E0E0E" : theme.mutedText }]}>
                 {!isModelReady && !modelError ? "Model Loading…" : "Start Scanning"}
               </Text>
             </TouchableOpacity>
@@ -355,18 +376,13 @@ export default function CameraDetectionScreen({
                     activeOpacity={0.7}
                     onPress={() => navigateTo("learn")}
                   >
-                    <Text style={[styles.btnSecondaryText, { color: theme.secondaryText }]}>
-                      Correct
-                    </Text>
+                    <Text style={[styles.btnSecondaryText, { color: theme.secondaryText }]}>Correct</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={[styles.btnPrimary, { backgroundColor: theme.primary, flex: 1.2 }]}
                     activeOpacity={0.7}
-                    onPress={() => {
-                      onConfirm();
-                      setIsCameraActive(false);
-                    }}
+                    onPress={() => { onConfirm(); setIsCameraActive(false); }}
                   >
                     <Text style={[styles.btnPrimaryText, { color: "#0E0E0E" }]}>Confirm</Text>
                   </TouchableOpacity>
@@ -383,31 +399,15 @@ export default function CameraDetectionScreen({
 const styles = StyleSheet.create({
   root: { flex: 1 },
 
-  permissionState: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 14,
-    paddingHorizontal: 32,
-  },
+  permissionState: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, paddingHorizontal: 32 },
   permissionTitle: { fontSize: 17, fontWeight: "700", textAlign: "center" },
   permissionHint:  { fontSize: 13, textAlign: "center", lineHeight: 20 },
   permissionBtn:   { marginTop: 8, paddingHorizontal: 28, paddingVertical: 12, borderRadius: 10 },
   permissionBtnText: { fontSize: 14, fontWeight: "700" },
 
   cameraContainer: { flex: 1 },
-  inactiveCamera: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-  },
-  modelLoadingRing: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 4,
-  },
+  inactiveCamera:  { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
+  modelLoadingRing: { width: 64, height: 64, borderRadius: 32, borderWidth: 4 },
   inactiveTitle: { fontSize: 20, fontWeight: "700", marginTop: 8 },
   inactiveSub:   { fontSize: 14 },
   camera: { flex: 1 },
@@ -415,27 +415,45 @@ const styles = StyleSheet.create({
   waitingOverlay: { position: "absolute", bottom: 20, alignSelf: "center" },
   waitingLabel:   { fontSize: 13, fontWeight: "600" },
 
-  corner: { position: "absolute", width: 24, height: 24, borderWidth: 2 },
-  topLeft:     { top: 20, left: 20,  borderRightWidth: 0, borderBottomWidth: 0 },
-  topRight:    { top: 20, right: 20, borderLeftWidth: 0,  borderBottomWidth: 0 },
+  corner:      { position: "absolute", width: 24, height: 24, borderWidth: 2 },
+  topLeft:     { top: 20, left: 20,   borderRightWidth: 0, borderBottomWidth: 0 },
+  topRight:    { top: 20, right: 20,  borderLeftWidth: 0,  borderBottomWidth: 0 },
   bottomLeft:  { bottom: 20, left: 20,  borderRightWidth: 0, borderTopWidth: 0 },
   bottomRight: { bottom: 20, right: 20, borderLeftWidth: 0,  borderTopWidth: 0 },
 
-  boundingBox: { position: "absolute", borderWidth: 2 },
-  boxLabel: { position: "absolute", top: 0, left: 0, paddingHorizontal: 4, paddingVertical: 2 },
+  boundingBox:  { position: "absolute", borderWidth: 2 },
+  boxLabel:     { position: "absolute", top: 0, left: 0, paddingHorizontal: 4, paddingVertical: 2 },
   boxLabelText: { fontSize: 10, fontWeight: "700", color: "#0E0E0E" },
 
-  resultPanel: { paddingHorizontal: 20, paddingVertical: 18, borderTopWidth: 1, gap: 14 },
-  resultRow:   { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  detectionLabel: { fontSize: 18, fontWeight: "700" },
-  waitingTitle:   { fontSize: 18, fontWeight: "700" },
-  resultSub:      { fontSize: 12, marginTop: 2 },
-
-  actions:    { flexDirection: "row", gap: 10 },
-  btnPrimary: { flex: 1, height: 44, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-  btnPrimaryText: { fontSize: 14, fontWeight: "700", letterSpacing: 0.5 },
-  btnSecondary: { flex: 1, height: 44, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  btnSecondaryText: { fontSize: 14, fontWeight: "600" },
-
   overlay: { ...StyleSheet.absoluteFillObject, zIndex: 10 },
+
+  // Result panel
+  resultPanel: { paddingHorizontal: 20, paddingVertical: 14, borderTopWidth: 1, gap: 6 },
+
+  detectionHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  detectionLabel:     { fontSize: 18, fontWeight: "700" },
+  waitingTitle:       { fontSize: 18, fontWeight: "700" },
+  resultSub:          { fontSize: 12, marginTop: 2 },
+
+  // Status pill
+  statusPill:     { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 99, borderWidth: 1 },
+  statusPillText: { fontSize: 11, fontWeight: "700" },
+
+  // Feature chips — OCR text + colour
+  featureRow:       { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 },
+  featureChip:      { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, maxWidth: "70%" },
+  featureChipText:  { fontSize: 11, fontWeight: "600", flexShrink: 1 },
+
+  // Suggestions row
+  suggestionsRow:    { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 2 },
+  suggestionsLabel:  { fontSize: 11 },
+  suggestionChip:    { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
+  suggestionChipText:{ fontSize: 11, fontWeight: "600" },
+
+  // Buttons
+  actions:      { flexDirection: "row", gap: 10, marginTop: 8 },
+  btnPrimary:   { flex: 1, height: 44, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  btnPrimaryText:   { fontSize: 14, fontWeight: "700", letterSpacing: 0.5 },
+  btnSecondary:     { flex: 1, height: 44, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  btnSecondaryText: { fontSize: 14, fontWeight: "600" },
 });
