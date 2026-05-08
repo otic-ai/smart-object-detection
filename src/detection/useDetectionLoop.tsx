@@ -20,6 +20,12 @@ interface UseDetectionLoopReturn {
   modelLoadProgress: string | null;
 }
 
+// Cached OCR+colour result from previous frame
+interface FeatureCache {
+  ocrText: string | null;
+  dominantColor: string | null;
+}
+
 export function useDetectionLoop({
   onDetectionResult,
   cameraRef,
@@ -33,10 +39,15 @@ export function useDetectionLoop({
     detectionEngine.ready ? null : "Initialising…"
   );
 
-  const isRunningRef    = useRef(false);  // true = YOLO busy right now
-  const frameCountRef   = useRef(0);
-  const isLoopActiveRef = useRef(false);
-  const historyRef      = useRef<string[]>(history);
+  const isRunningRef      = useRef(false);
+  const frameCountRef     = useRef(0);
+  const isLoopActiveRef   = useRef(false);
+  const historyRef        = useRef<string[]>(history);
+  // ✅ Stores OCR result from previous frame — used in current frame emit
+  const featureCacheRef   = useRef<FeatureCache>({ ocrText: null, dominantColor: null });
+  // ✅ Tracks the in-flight OCR promise so we never run two at once
+  const ocrInFlightRef    = useRef<Promise<void> | null>(null);
+
   useEffect(() => { historyRef.current = history; }, [history]);
 
   // ── Model load ──────────────────────────────────────────────────────────────
@@ -48,14 +59,14 @@ export function useDetectionLoop({
     }
 
     let cancelled = false;
-    const loopLoadStart = Date.now();
+    const t = Date.now();
     console.log("[Loop] 📦 Awaiting model load...");
     setModelLoadProgress("Loading TFLite model…");
 
     detectionEngine.loadModel()
       .then(() => {
         if (!cancelled) {
-          console.log(`[Loop] ✅ Model ready in ${Date.now() - loopLoadStart}ms`);
+          console.log(`[Loop] ✅ Model ready in ${Date.now() - t}ms`);
           setModelLoadProgress(null);
           setIsModelReady(true);
         }
@@ -79,16 +90,15 @@ export function useDetectionLoop({
 
     isLoopActiveRef.current = true;
     console.log("[Loop] 🎥 Starting, throttle:", throttleMs, "ms");
-    let isMounted = true;
+    let isMounted     = true;
     let skippedFrames = 0;
 
     const interval = setInterval(async () => {
-      // ── FRAME SKIP ────────────────────────────────────────────────────────
-      // If YOLO still processing previous frame → skip this tick entirely.
-      // Don't queue frames — stale frames are useless for real-time detection.
+      // ── FRAME SKIP ──────────────────────────────────────────────────────
+      // YOLO still busy → discard this tick. Never queue stale frames.
       if (isRunningRef.current) {
         skippedFrames++;
-        console.log(`[Loop] ⏭ Frame skipped (YOLO busy) — total skipped: ${skippedFrames}`);
+        console.log(`[Loop] ⏭ Skipped (YOLO busy) total=${skippedFrames}`);
         return;
       }
       if (!isMounted || !isLoopActiveRef.current || !cameraRef.current) return;
@@ -101,7 +111,6 @@ export function useDetectionLoop({
         // ── Step 1: Capture ────────────────────────────────────────────────
         const captureStart = Date.now();
         let photo: any = null;
-
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
             const timeout = new Promise<never>((_, reject) =>
@@ -109,7 +118,7 @@ export function useDetectionLoop({
             );
             photo = await Promise.race([
               cameraRef.current!.takePictureAsync({
-                quality: 0.1,        // lowest — we resize anyway
+                quality: 0.1,
                 skipProcessing: true,
                 exif: false,
               }),
@@ -124,7 +133,6 @@ export function useDetectionLoop({
         if (!photo?.uri) return;
 
         // ── Step 2: Resize to 320×320 ─────────────────────────────────────
-        // 320×320 = 4x fewer pixels than 640×640 → jpeg-js ~4x faster
         const resizeStart = Date.now();
         const resized = await ImageManipulator.manipulateAsync(
           photo.uri,
@@ -134,67 +142,50 @@ export function useDetectionLoop({
         const resizeTime = Date.now() - resizeStart;
         if (!resized.base64 || !resized.uri) return;
 
-        // ── Step 3 + 4: YOLO and OCR in PARALLEL ──────────────────────────
-        //
-        // Senior's suggestion implemented here:
-        //
-        //   YOLO inference   ──────────────────────► result
-        //   OCR + colour     ──────────────────────► features
-        //                    ↑ both start together ↑
-        //   Promise.all waits for BOTH → then merge → emit Detection
-        //
-        // Total time = max(YOLO, OCR) instead of YOLO + OCR
-        // Saves ~200–350ms per frame on average.
-        //
-        const parallelStart = Date.now();
-        const [results, features] = await Promise.all([
-          // YOLO inference — ~700ms
-          detectionEngine.detectFromBase64(resized.base64, 320, 320),
-          // OCR + colour on the full resized frame (bbox crop happens inside)
-          // We pass the URI for crop + OCR, confidence = 0 here because
-          // we don't have YOLO result yet — OCR runs unconditionally
-          extractFeatures(resized.uri, 320, 320, { x: 0, y: 0, width: 100, height: 100 }, 100),
-        ]);
-        const parallelTime = Date.now() - parallelStart;
+        // ── Step 3: YOLO Inference ─────────────────────────────────────────
+        // Runs alone — no waiting for OCR.
+        // OCR from PREVIOUS frame is already in featureCacheRef.
+        const inferStart = Date.now();
+        const results = await detectionEngine.detectFromBase64(resized.base64, 320, 320);
+        const inferTime = Date.now() - inferStart;
 
         if (results.length === 0) return;
         if (!isLoopActiveRef.current) return;
 
         const top = results[0];
 
-        // Now that YOLO result is available, run a focused feature extraction
-        // on the actual bbox — colour only (OCR already done above on full frame)
-        // This is fast (~20ms) and gives accurate colour for the specific object.
-        const focusedFeatures = await extractFeatures(
-          resized.uri,
-          320,
-          320,
-          top.bbox,
-          top.confidence
-        );
+        // ── Step 4: Emit immediately using PREVIOUS frame's OCR cache ──────
+        //
+        // KEY IDEA (senior's suggestion implemented properly):
+        //
+        //   Frame N:   YOLO ──► emit with cache[N-1] OCR
+        //                    └─► fire OCR in background (no await)
+        //   Frame N+1: YOLO ──► emit with cache[N] OCR  ← 1 frame late, unnoticeable
+        //
+        // Result: YOLO never waits for OCR. Total = YOLO time only (~700ms).
+        // OCR updates cache in background, enriches next frame's result.
+        //
+        const cachedFeatures = featureCacheRef.current;
 
-        // Merge: use focused colour (accurate) + full-frame OCR (already done)
-        const mergedOcr   = focusedFeatures.ocrText   ?? features.ocrText;
-        const mergedColor = focusedFeatures.dominantColor ?? features.dominantColor;
-
-        // ── Step 5: matchAndScore ──────────────────────────────────────────
+        // ── Step 5: matchAndScore with cached features ─────────────────────
         const input: DetectionInput = {
           id:         `${Date.now()}`,
           class:      top.label.toLowerCase(),
           confidence: top.confidence / 100,
-          ocr_text:   mergedOcr    ?? undefined,
-          color:      mergedColor  ?? undefined,
+          ocr_text:   cachedFeatures.ocrText    ?? undefined,
+          color:      cachedFeatures.dominantColor ?? undefined,
         };
         const match = matchAndScore(input, historyRef.current);
 
         const totalTime = Date.now() - frameStart;
         console.log(
           `[Loop] ✅ #${frameCountRef.current} [${top.label} → ${match.label}] | ` +
-          `cap=${captureTime}ms  resize=${resizeTime}ms  parallel=${parallelTime}ms  ` +
-          `TOTAL=${totalTime}ms  skipped=${skippedFrames}`
+          `cap=${captureTime}ms  resize=${resizeTime}ms  infer=${inferTime}ms  ` +
+          `TOTAL=${totalTime}ms  skipped=${skippedFrames}` +
+          `  ocr="${cachedFeatures.ocrText ?? "none"}"  color="${cachedFeatures.dominantColor ?? "none"}"`
         );
 
-        // ── Step 6: Emit ───────────────────────────────────────────────────
+        // ── Step 6: Emit Detection ─────────────────────────────────────────
         const boxes: BoundingBox[] = results.map(r => ({
           x: r.bbox.x, y: r.bbox.y,
           width: r.bbox.width, height: r.bbox.height,
@@ -209,11 +200,37 @@ export function useDetectionLoop({
           timestamp:     new Date().toLocaleTimeString(),
           boundingBoxes: boxes,
           suggestions:   match.suggestions,
-          ocrText:       mergedOcr    ?? undefined,
-          dominantColor: mergedColor  ?? undefined,
+          ocrText:       cachedFeatures.ocrText       ?? undefined,
+          dominantColor: cachedFeatures.dominantColor ?? undefined,
         };
 
         onDetectionResult(detection, boxes);
+
+        // ── Step 7: Fire OCR in background for NEXT frame ─────────────────
+        // No await — YOLO loop is already free. OCR updates cache when done.
+        // If previous OCR still running, skip to avoid stacking background tasks.
+        if (!ocrInFlightRef.current) {
+          ocrInFlightRef.current = extractFeatures(
+            resized.uri,
+            320,
+            320,
+            top.bbox,
+            top.confidence
+          ).then((features) => {
+            featureCacheRef.current = {
+              ocrText:      features.ocrText,
+              dominantColor: features.dominantColor,
+            };
+            console.log(
+              `[Loop] 🔬 OCR cache updated: ocr="${features.ocrText ?? "none"}"  color="${features.dominantColor ?? "none"}"`
+            );
+          }).catch(() => {
+            // OCR failure is non-fatal — cache stays as-is
+          }).finally(() => {
+            ocrInFlightRef.current = null; // allow next OCR run
+          });
+        }
+
       } catch (e) {
         console.warn("[Loop] Frame error:", e);
       } finally {
@@ -225,6 +242,8 @@ export function useDetectionLoop({
       isLoopActiveRef.current = false;
       isMounted = false;
       clearInterval(interval);
+      featureCacheRef.current  = { ocrText: null, dominantColor: null };
+      ocrInFlightRef.current   = null;
       console.log(`[Loop] 🛑 Stopped. Frames=${frameCountRef.current} Skipped=${skippedFrames}`);
       frameCountRef.current = 0;
     };
