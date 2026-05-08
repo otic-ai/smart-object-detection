@@ -1,14 +1,5 @@
 import * as ImageManipulator from "expo-image-manipulator";
 
-/**
- * Crops the bounding box region from a native file URI.
- * Returns the cropped image as a native URI (fast — stays on native thread).
- *
- * @param uri         Native file URI from takePictureAsync or ImageManipulator
- * @param frameWidth  Actual pixel width of the image
- * @param frameHeight Actual pixel height of the image
- * @param bbox        Bounding box in 0–100 percentage coords
- */
 export async function cropRegion(
   uri: string,
   frameWidth: number,
@@ -16,19 +7,26 @@ export async function cropRegion(
   bbox: { x: number; y: number; width: number; height: number }
 ): Promise<string | null> {
   try {
-    // Convert percentage bbox → pixel coords, clamped to frame bounds
-    const originX = Math.max(0, (bbox.x / 100) * frameWidth);
-    const originY = Math.max(0, (bbox.y / 100) * frameHeight);
-    const width   = Math.min(frameWidth  - originX, (bbox.width  / 100) * frameWidth);
-    const height  = Math.min(frameHeight - originY, (bbox.height / 100) * frameHeight);
+    // Convert 0–100 percentage → pixels
+    const originX = (bbox.x / 100) * frameWidth;
+    const originY = (bbox.y / 100) * frameHeight;
+    const rawW    = (bbox.width  / 100) * frameWidth;
+    const rawH    = (bbox.height / 100) * frameHeight;
 
-    // Guard: skip if bbox is degenerate
-    if (width < 10 || height < 10) return null;
+    // Clamp so crop rectangle never exceeds image bounds
+    // This is the fix for "Invalid crop options" error
+    const clampedX = Math.max(0, Math.min(originX, frameWidth  - 1));
+    const clampedY = Math.max(0, Math.min(originY, frameHeight - 1));
+    const clampedW = Math.max(1, Math.min(rawW, frameWidth  - clampedX));
+    const clampedH = Math.max(1, Math.min(rawH, frameHeight - clampedY));
+
+    // Skip degenerate boxes
+    if (clampedW < 10 || clampedH < 10) return null;
 
     const cropped = await ImageManipulator.manipulateAsync(
       uri,
-      [{ crop: { originX, originY, width, height } }],
-      { format: ImageManipulator.SaveFormat.JPEG } // URI output — no base64 overhead
+      [{ crop: { originX: clampedX, originY: clampedY, width: clampedW, height: clampedH } }],
+      { format: ImageManipulator.SaveFormat.JPEG }
     );
 
     return cropped.uri ?? null;
