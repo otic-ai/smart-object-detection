@@ -2,6 +2,10 @@ import { loadTensorflowModel, TensorflowModel } from "react-native-fast-tflite";
 import { COCO_LABELS } from "./labels";
 import * as jpegJs from "jpeg-js";
 import { decode as decodeBase64 } from "base64-arraybuffer";
+import { Asset } from "expo-asset";
+
+import * as ImageManipulator from "expo-image-manipulator";
+import * as FileSystem from "expo-file-system/legacy";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,34 +40,105 @@ class DetectionEngine {
    */
   private _loadPromise: Promise<void> | null = null;
 
+  // async loadModel(): Promise<void> {
+  //   // Already loaded — resolve immediately
+  //   if (this.isLoaded) return;
+
+  //   // Already loading — return the same in-flight promise (no duplicate loads)
+  //   if (this._loadPromise) return this._loadPromise;
+
+  //   this._loadPromise = (async () => {
+  //     try {
+  //       console.log("[DetectionEngine] 📦 Starting model load...");
+  //       const loadStart = Date.now();
+
+  //       // Try GPU delegate first — ~3x faster inference on Android (float32 compatible).
+  //       // Falls back to CPU if GPU is unavailable on the device.
+  //       // Correct API: loadTensorflowModel(source, delegates[]) — second arg is TensorflowModelDelegate[]
+  //       // Android delegate = 'android-gpu', iOS = 'metal' or 'core-ml'
+  //       const isIOS = require("react-native").Platform.OS === "ios";
+  //       const gpuDelegate: import("react-native-fast-tflite").TensorflowModelDelegate =
+  //         isIOS ? "metal" : "android-gpu";
+
+  //       let usedDelegate = gpuDelegate;
+  //       try {
+  //           this.model = await loadTensorflowModel(require("../../assets/models/yolov8n_float32.tflite"), gpuDelegate);
+  //         console.log(`[DetectionEngine] ✅ GPU delegate active (${gpuDelegate})`);
+  //       } catch (gpuErr) {
+  //         console.warn(`[DetectionEngine] ⚠️ ${gpuDelegate} failed, falling back to CPU:`, gpuErr);
+  //         let usedDelegate: string = gpuDelegate;  // widen to string for logging
+  //         usedDelegate = "cpu"; // will log as cpu
+  //         this.model = await loadTensorflowModel(
+  //           require("../../assets/models/yolov8n_float32.tflite"),
+  //           undefined  // CPU path
+  //         );
+  //       }
+
+  //       this.isLoaded = true;
+  //       const loadMs = Date.now() - loadStart;
+  //       console.log(`[DetectionEngine] ✅ Model loaded in ${loadMs}ms (delegate=${usedDelegate})`);
+  //     } catch (err) {
+  //       // Clear promise so caller can retry
+  //       this._loadPromise = null;
+  //       console.error("[DetectionEngine] ❌ Failed to load model:", err);
+  //       throw err;
+  //     }
+  //   })();
+
+  //   return this._loadPromise;
+  // }
+
   async loadModel(): Promise<void> {
-    // Already loaded — resolve immediately
-    if (this.isLoaded) return;
+  if (this.isLoaded) return;
+  if (this._loadPromise) return this._loadPromise;
 
-    // Already loading — return the same in-flight promise (no duplicate loads)
-    if (this._loadPromise) return this._loadPromise;
+  this._loadPromise = (async () => {
+    // Download model to local filesystem first
+    const [asset] = await Asset.loadAsync(
+      require("../../assets/models/yolov8n_float32.tflite")
+    );
+    const localUri = asset.localUri ?? asset.uri;
+    console.log("[DetectionEngine] 📍 Model local path:", localUri);
 
-    this._loadPromise = (async () => {
+    const { Platform } = require("react-native");
+    const isIOS = Platform.OS === "ios";
+
+    // Delegate priority:
+    //   iOS:     metal > core-ml > cpu
+    //   Android: nnapi > cpu
+    //            (android-gpu fails on most devices with float32 models)
+    const delegates: string[] = isIOS ? ["metal", "core-ml"] : ["nnapi"];
+    let usedDelegate = "cpu";
+
+    for (const delegate of delegates) {
       try {
-        console.log("[DetectionEngine] 📦 Starting model load...");
-        const loadStart = Date.now();
         this.model = await loadTensorflowModel(
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          require("../../assets/models/yolov8n_float32.tflite")
+          { url: localUri } as any,
+          delegate as any
         );
-        this.isLoaded = true;
-        const loadMs = Date.now() - loadStart;
-        console.log(`[DetectionEngine] ✅ Model loaded in ${loadMs}ms`);
-      } catch (err) {
-        // Clear promise so caller can retry
-        this._loadPromise = null;
-        console.error("[DetectionEngine] ❌ Failed to load model:", err);
-        throw err;
+        usedDelegate = delegate;
+        console.log(`[DetectionEngine] ✅ Delegate active: ${delegate}`);
+        break; // success — stop trying
+      } catch {
+        console.warn(`[DetectionEngine] ⚠️ ${delegate} failed, trying next...`);
       }
-    })();
+    }
 
-    return this._loadPromise;
-  }
+    // All delegates failed — fall back to CPU
+    if (!this.model) {
+      console.log("[DetectionEngine] 📌 Using CPU (no hardware delegate available)");
+      this.model = await loadTensorflowModel(
+        { url: localUri } as any,
+        undefined
+      );
+    }
+
+    this.isLoaded = true;
+    console.log(`[DetectionEngine] ✅ Model loaded (delegate=${usedDelegate})`);
+  })();
+
+  return this._loadPromise;
+}
 
   get ready(): boolean {
     return this.isLoaded;
@@ -254,6 +329,20 @@ class DetectionEngine {
     if (intersection === 0) return 0;
     return intersection / (a.width * a.height + b.width * b.height - intersection);
   }
+
+  async detectFromUri(uri: string): Promise<DetectionEngineResult[]> {
+  if (!this.isLoaded || !this.model) return [];
+  try {
+    // Get base64 only for the 640×640 already-resized frame — unavoidable
+    // BUT: use FileSystem directly instead of going through JPEG decode
+    // Alternative: resize to exact input and read pixels via a canvas approach
+    // For now: still need base64 but skip the double-decode
+    const b64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return this.detectFromBase64(b64, 640, 640);
+  } catch { return []; }
+}
 }
 
 export const detectionEngine = new DetectionEngine();

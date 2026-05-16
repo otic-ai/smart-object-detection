@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -29,6 +29,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.otic.syntheticeye",
+      "newArchEnabled": true,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
@@ -39,10 +40,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      ["expo-camera", {
-        "cameraPermission": "SYNTHETIC_EYE uses the camera for real-time AI object detection."
-      }]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "SYNTHETIC_EYE uses the camera for real-time AI object detection."
+        }
+      ],
+      "expo-asset"
     ]
   }
 }
-

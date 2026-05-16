@@ -17,6 +17,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppRoute } from './src/types/navigation';
 import { BoundingBox, Detection } from './src/types/detection';
 import { matchAndScore, DetectionInput } from './src/matching';
+import { preloadModel } from './src/detection/DetectionEngine';
 import MobileBottomNav from './src/components/MobileBottomNav';
 import CameraDetectionScreen from './src/screens/CameraDetectionScreen';
 import CorrectionLearningScreen from './src/screens/CorrectionLearningScreen';
@@ -34,8 +35,13 @@ export default function App() {
   const [activeDetection, setActiveDetection]         = useState<Detection | null>(null);
   const [activeBoundingBoxes, setActiveBoundingBoxes] = useState<BoundingBox[]>([]);
   const [detectionHistory, setDetectionHistory]       = useState<Detection[]>([]);
-  // Ref so onDetectionResult always sees the latest history without re-creating.
-  const historyRef = useRef<Detection[]>([]);
+
+  // historyRef keeps useDetectionLoop's interval closure up-to-date without
+  // re-creating the loop every time history grows.
+  const historyRef = useRef<string[]>([]);
+  useEffect(() => {
+    historyRef.current = detectionHistory.map(d => d.label);
+  }, [detectionHistory]);
 
   // ─── Navigation ────────────────────────────────────────────────────────────
   const navigateTo = (nextRoute: AppRoute) => {
@@ -49,57 +55,16 @@ export default function App() {
     setRoute(current => routeHistoryRef.current.pop() ?? current);
   };
 
-  // Keep historyRef in sync with state so callbacks never stale-close over it.
-  useEffect(() => { historyRef.current = detectionHistory; }, [detectionHistory]);
-
-  // ─── Demo detection — fires once on mount so the pipeline is visible ───────
-  // Remove this block once the real YOLOv8 model is wired in.
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const demoRaw: Detection = {
-        id: 'demo-1',
-        label: 'bottle',
-        confidence: 68,
-        status: 'ambiguous',
-        timestamp: new Date().toLocaleTimeString(),
-      };
-      const demoBoxes: BoundingBox[] = [{
-        x: 30, y: 20, width: 40, height: 55,
-        label: 'bottle', confidence: 68,
-      }];
-      onDetectionResult(demoRaw, demoBoxes);
-    }, 2000);
-    return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // ─── Detection callbacks ───────────────────────────────────────────────────
 
   /**
-   * 🔌 AI INTEGRATION POINT
-   * Call this from the YOLOv8 / TFLite model on each processed frame.
-   * Raw detection is passed through matchAndScore() before being stored,
-   * so the UI always shows the refined label, status, and suggestions.
+   * Called by useDetectionLoop after the full pipeline:
+   *   capture → resize → YOLOv8 → feature extraction → matchAndScore
+   *
+   * The Detection received here is already fully enriched — just lift into state.
    */
-  const onDetectionResult = useCallback((raw: Detection, boxes: BoundingBox[]) => {
-    const input: DetectionInput = {
-      id:         raw.id,
-      class:      raw.label.toLowerCase(),
-      confidence: raw.confidence / 100,   // matchAndScore expects 0–1
-    };
-
-    const pastLabels = historyRef.current.map(d => d.label);
-    const match      = matchAndScore(input, pastLabels);
-
-    const enhanced: Detection = {
-      ...raw,
-      label:       match.label,
-      confidence:  Math.round(match.confidence * 100),
-      status:      match.status,
-      suggestions: match.suggestions,
-    };
-
-    setActiveDetection(enhanced);
+  const onDetectionResult = useCallback((detection: Detection, boxes: BoundingBox[]) => {
+    setActiveDetection(detection);
     setActiveBoundingBoxes(boxes);
   }, []);
 
@@ -107,10 +72,7 @@ export default function App() {
   const onConfirmDetection = useCallback(() => {
     if (!activeDetection) return;
     const verified: Detection = { ...activeDetection, status: 'verified', suggestions: undefined };
-    setDetectionHistory(prev => {
-      historyRef.current = [verified, ...prev];
-      return historyRef.current;
-    });
+    setDetectionHistory(prev => [verified, ...prev]);
     setActiveDetection(null);
     setActiveBoundingBoxes([]);
   }, [activeDetection]);
@@ -130,10 +92,7 @@ export default function App() {
       status:      'corrected',
       suggestions: undefined,
     };
-    setDetectionHistory(prev => {
-      historyRef.current = [corrected, ...prev];
-      return historyRef.current;
-    });
+    setDetectionHistory(prev => [corrected, ...prev]);
     setActiveDetection(null);
     setActiveBoundingBoxes([]);
   }, [activeDetection]);
